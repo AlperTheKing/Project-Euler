@@ -1,12 +1,14 @@
 #include <iostream>
-#include <omp.h>
+#include <pthread.h>
 #include <chrono>
 #include <iomanip>
 #include <cmath>
+#include <vector>
+#include <thread>  // For getting the number of hardware threads
 
 // Function to calculate the number of digits in an unsigned long long number
 int numberOfDigits(unsigned long long n) {
-    return std::to_string(n).length();
+    return n == 0 ? 1 : static_cast<int>(log10(n)) + 1;
 }
 
 // Function to compute the rounded square root using Heron's method (adapted for integers)
@@ -35,22 +37,61 @@ int roundedSquareRoot(unsigned long long n) {
     return iterations;
 }
 
+// Thread arguments struct
+struct ThreadArgs {
+    unsigned long long startRange;
+    unsigned long long endRange;
+    unsigned long long totalIterations;
+};
+
+// Function that each thread will execute
+void* threadFunction(void* arg) {
+    ThreadArgs* args = (ThreadArgs*)arg;
+    unsigned long long totalIterations = 0;
+
+    // Loop over the assigned range and calculate the iterations
+    for (unsigned long long n = args->startRange; n < args->endRange; ++n) {
+        int iterations = roundedSquareRoot(n);
+        totalIterations += iterations;
+    }
+
+    args->totalIterations = totalIterations;
+    return nullptr;
+}
+
 int main() {
     const unsigned long long startRange = 10000000000000ULL;  // Start of the range 10^13
     const unsigned long long endRange = 100000000000000ULL;   // End of the range 10^14 (exclusive)
-    unsigned long long totalIterations = 0;                   // To accumulate total iterations
     unsigned long long numberOfNumbers = endRange - startRange;  // Total numbers in the range
 
-    omp_set_num_threads(64);  // Use all cores on AMD Threadripper 7980X
+    // Get the number of hardware threads (cores)
+    unsigned int numThreads = std::thread::hardware_concurrency();
+    if (numThreads == 0) {
+        numThreads = 4;  // Fallback to 4 threads if hardware_concurrency fails
+    }
+
+    // Create an array to hold thread arguments
+    std::vector<ThreadArgs> threadArgs(numThreads);
+    std::vector<pthread_t> threads(numThreads);
+
+    unsigned long long numbersPerThread = numberOfNumbers / numThreads;
 
     // Start measuring time
     auto start = std::chrono::high_resolution_clock::now();
 
-    // Parallelized loop with OpenMP
-    #pragma omp parallel for reduction(+:totalIterations)
-    for (unsigned long long n = startRange; n < endRange; ++n) {
-        int iterations = roundedSquareRoot(n);  // Calculate iterations for number n
-        totalIterations += iterations;          // Accumulate total iterations
+    // Create and launch threads
+    for (unsigned int i = 0; i < numThreads; ++i) {
+        threadArgs[i].startRange = startRange + i * numbersPerThread;
+        threadArgs[i].endRange = (i == numThreads - 1) ? endRange : threadArgs[i].startRange + numbersPerThread;
+        threadArgs[i].totalIterations = 0;
+        pthread_create(&threads[i], nullptr, threadFunction, &threadArgs[i]);
+    }
+
+    // Wait for all threads to finish
+    unsigned long long totalIterations = 0;
+    for (unsigned int i = 0; i < numThreads; ++i) {
+        pthread_join(threads[i], nullptr);
+        totalIterations += threadArgs[i].totalIterations;
     }
 
     // Stop measuring time

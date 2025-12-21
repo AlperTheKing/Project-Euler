@@ -22,12 +22,11 @@ static uint64_t next_turn_after(uint64_t t, int mod) {
 }
 
 static uint64_t compute_F(uint64_t A, uint64_t B, uint64_t C) {
-    static constexpr int role_mod[3] = {1, 2, 0}; // A,B,C turns.
+    static constexpr int role_mod[3] = {1, 2, 0};
     static constexpr int role_base[3] = {1, 2, 3};
     std::vector<uint8_t> roles;
     int base_role = -1;
 
-    // Reduce by replacing the sum with the difference, then unwind turns.
     while (true) {
         if (A == B + C) {
             roles.push_back(0);

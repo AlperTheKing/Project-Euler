@@ -1,6 +1,3 @@
-// Commit message: Euler905: reduce by sum-difference chain and unwind turn order.
-// Approach: repeatedly replace the known-sum value with the absolute difference,
-// record which role held the sum each step, then unwind turns to get F().
 #include <cstdint>
 #include <iostream>
 #include <thread>

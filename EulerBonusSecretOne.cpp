@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -7187,6 +7188,11 @@ struct Image {
     vector<uint8_t> gray;
 };
 
+const string kDefaultUrl =
+    "https://projecteuler.net/resources/images/bonus_secret_statement.png?1738588439";
+const string kDefaultInputPath = "bonus_secret_statement.png";
+const string kDefaultBwOutput = "output_bw.png";
+
 string lower_ext(const string& path) {
     size_t pos = path.find_last_of('.');
     if (pos == string::npos) return "";
@@ -7340,6 +7346,34 @@ bool load_image(const string& path, Image& img, string& err) {
     }
     err = "failed to decode image: " + err_png + "; " + err_pgm;
     return false;
+}
+
+bool file_exists(const string& path) {
+    ifstream in(path, ios::binary);
+    return in.good();
+}
+
+bool download_file(const string& url, const string& path) {
+    if (system("curl --version > /dev/null 2>&1") == 0) {
+        string cmd = "curl -L -o \"" + path + "\" \"" + url + "\"";
+        return system(cmd.c_str()) == 0;
+    }
+    if (system("wget --version > /dev/null 2>&1") == 0) {
+        string cmd = "wget -O \"" + path + "\" \"" + url + "\"";
+        return system(cmd.c_str()) == 0;
+    }
+    return false;
+}
+
+void open_viewer(const string& path) {
+#if defined(__APPLE__)
+    string cmd = "open \"" + path + "\"";
+#elif defined(_WIN32)
+    string cmd = "cmd /c start \"\" \"" + path + "\"";
+#else
+    string cmd = "xdg-open \"" + path + "\"";
+#endif
+    system(cmd.c_str());
 }
 
 inline uint8_t sum4_mod7(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
@@ -7524,36 +7558,26 @@ void write_pgm(const string& path, const vector<uint8_t>& img, int W, int H) {
     out.write(reinterpret_cast<const char*>(scaled.data()), scaled.size());
 }
 
-void write_color_png(const string& path, const vector<uint8_t>& img, int W, int H, int scale) {
+void write_bw_png(const string& path, const vector<uint8_t>& img, int W, int H, int scale) {
     if (scale < 1) scale = 1;
     if (W <= 0 || H <= 0) return;
     unsigned W2 = static_cast<unsigned>(W * scale);
     unsigned H2 = static_cast<unsigned>(H * scale);
     vector<unsigned char> rgba(static_cast<size_t>(W2) * H2 * 4, 255);
 
-    static const unsigned char palette[7][3] = {
-        {255, 255, 255},  
-        {0, 0, 0},        
-        {220, 20, 60},    
-        {30, 144, 255},   
-        {34, 139, 34},    
-        {255, 165, 0},    
-        {148, 0, 211}     
-    };
-
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
-            uint8_t v = img[static_cast<size_t>(y) * W + x];
-            const unsigned char* c = palette[v % 7];
+            uint8_t v = img[static_cast<size_t>(y) * W + x] % 7;
+            unsigned char val = static_cast<unsigned char>(v * 255 / 6);
             int y0 = y * scale;
             int x0 = x * scale;
             for (int dy = 0; dy < scale; ++dy) {
                 size_t row = static_cast<size_t>(y0 + dy) * W2;
                 for (int dx = 0; dx < scale; ++dx) {
                     size_t idx = (row + (x0 + dx)) * 4;
-                    rgba[idx + 0] = c[0];
-                    rgba[idx + 1] = c[1];
-                    rgba[idx + 2] = c[2];
+                    rgba[idx + 0] = val;
+                    rgba[idx + 1] = val;
+                    rgba[idx + 2] = val;
                     rgba[idx + 3] = 255;
                 }
             }
@@ -7613,9 +7637,10 @@ void print_ascii(const vector<uint8_t>& img, int W, int H) {
 }
 
 void print_usage(const char* argv0) {
-    cerr << "Usage: " << argv0 << " <image.(png|pgm)> [--threads N] [--steps N]\n"
-         << "       [--out output.pgm] [--color-out output.png] [--scale N]\n"
-         << "       [--no-ascii] [--no-validate]\n";
+    cerr << "Usage: " << argv0 << " [image.(png|pgm)] [--threads N] [--steps N]\n"
+         << "       [--out output.pgm] [--bw-out output.png] [--scale N]\n"
+         << "       [--ascii] [--no-validate] [--no-open]\n"
+         << "Default input: " << kDefaultInputPath << "\n";
 }
 
 }  
@@ -7626,13 +7651,14 @@ int main(int argc, char** argv) {
 
     string input_path;
     string output_path = "output_mod7.pgm";
-    string color_output_path;
+    string bw_output_path = kDefaultBwOutput;
     uint64_t steps = 1000000000000ULL;
     int threads = static_cast<int>(thread::hardware_concurrency());
     if (threads <= 0) threads = 1;
-    bool ascii = true;
+    bool ascii = false;
     bool validate = true;
-    int scale = 6;
+    bool open_after = true;
+    int scale = 8;
 
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
@@ -7652,8 +7678,8 @@ int main(int argc, char** argv) {
             }
         } else if (arg == "--out" && i + 1 < argc) {
             output_path = argv[++i];
-        } else if (arg == "--color-out" && i + 1 < argc) {
-            color_output_path = argv[++i];
+        } else if ((arg == "--bw-out" || arg == "--color-out") && i + 1 < argc) {
+            bw_output_path = argv[++i];
         } else if (arg == "--scale" && i + 1 < argc) {
             try {
                 scale = stoi(argv[++i]);
@@ -7661,10 +7687,14 @@ int main(int argc, char** argv) {
                 cerr << "Invalid --scale value.\n";
                 return 1;
             }
+        } else if (arg == "--ascii") {
+            ascii = true;
         } else if (arg == "--no-ascii") {
             ascii = false;
         } else if (arg == "--no-validate") {
             validate = false;
+        } else if (arg == "--no-open") {
+            open_after = false;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -7677,13 +7707,23 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (input_path.empty()) {
-        print_usage(argv[0]);
-        return 1;
-    }
+    if (input_path.empty()) input_path = kDefaultInputPath;
 
     if (validate && !run_validation()) {
         return 1;
+    }
+
+    if (!file_exists(input_path)) {
+        if (input_path == kDefaultInputPath) {
+            cerr << "Downloading: " << kDefaultUrl << "\n";
+            if (!download_file(kDefaultUrl, input_path)) {
+                cerr << "Failed to download input image.\n";
+                return 1;
+            }
+        } else {
+            cerr << "Input file not found: " << input_path << "\n";
+            return 1;
+        }
     }
 
     Image img;
@@ -7698,13 +7738,16 @@ int main(int argc, char** argv) {
     apply_steps(img.gray, img.w, img.h, steps, threads);
 
     write_pgm(output_path, img.gray, img.w, img.h);
-    if (!color_output_path.empty()) {
-        write_color_png(color_output_path, img.gray, img.w, img.h, scale);
+    if (!bw_output_path.empty()) {
+        write_bw_png(bw_output_path, img.gray, img.w, img.h, scale);
     }
     if (ascii) {
         print_ascii(img.gray, img.w, img.h);
     } else {
         cerr << "ASCII preview disabled. Output written to " << output_path << "\n";
+    }
+    if (open_after && !bw_output_path.empty()) {
+        open_viewer(bw_output_path);
     }
 
     return 0;

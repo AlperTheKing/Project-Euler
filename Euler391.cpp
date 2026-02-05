@@ -8,13 +8,10 @@
 #include <utility>
 #include <vector>
 
-
-
 using namespace std;
 
 struct BitsetHash {
   size_t operator()(const vector<uint64_t> &v) const noexcept {
-    
     uint64_t h = 1469598103934665603ULL;
     for (uint64_t w : v) {
       h ^= w;
@@ -27,14 +24,13 @@ struct BitsetHash {
 class Solver {
 public:
   explicit Solver(int n_val) : n(n_val) {
-    
     B = 1;
     b = 0;
     while (B <= n) {
       B <<= 1;
       ++b;
     }
-    level = n + 1 - b; 
+    level = n + 1 - b;
     wordCount = (B + 63) / 64;
 
     precompute_popcount();
@@ -47,11 +43,9 @@ public:
       base_cost_to_end[i] = s_base[B] - s_base[i + 1];
     }
 
-    
     pool.emplace_back(wordCount, 0ULL);
     pool_map.emplace(pool[0], 0);
 
-    
     bit.assign(B + 1, 0);
     status.assign(B, 0);
     prefixLose.assign(B, 0);
@@ -86,26 +80,22 @@ private:
   vector<int> s_base;
   vector<int> base_cost_to_end;
 
-  
   vector<vector<uint16_t>> tmax_in;
-  
+
   vector<vector<int16_t>> max_t_out;
 
-  
   vector<vector<uint64_t>> pool;
   unordered_map<vector<uint64_t>, int, BitsetHash> pool_map;
 
-  
   unordered_map<uint64_t, int> memo_full;
   unordered_map<uint64_t, int> memo_partial;
 
-  
-  vector<int> bit;         
-  vector<uint8_t> status;  
+  vector<int> bit;
+  vector<uint8_t> status;
   vector<uint8_t> prefixLose;
 
-  static constexpr int V_ID_BITS = 21; 
-  static constexpr int W_BITS = 11;    
+  static constexpr int V_ID_BITS = 21;
+  static constexpr int W_BITS = 11;
   static constexpr int SHIFT_W_NEXT = V_ID_BITS;
   static constexpr int SHIFT_W = SHIFT_W_NEXT + W_BITS;
   static constexpr int SHIFT_LEVEL = SHIFT_W + W_BITS;
@@ -186,19 +176,12 @@ private:
       return it->second;
     }
     int id = static_cast<int>(pool.size());
-    if (id >= (1 << V_ID_BITS)) {
-      
-      
-    }
     pool.push_back(bits);
     pool_map.emplace(pool.back(), id);
     return id;
   }
 
-  
-  void bit_reset(int L) {
-    fill(bit.begin(), bit.begin() + (L + 1), 0);
-  }
+  void bit_reset(int L) { fill(bit.begin(), bit.begin() + (L + 1), 0); }
 
   void bit_add(int idx, int delta, int L) {
     for (int i = idx + 1; i <= L; i += i & -i) {
@@ -225,7 +208,6 @@ private:
                     bool partial) {
     int L = partial ? (B - 1) : B;
 
-    
     if (!partial) {
       uint8_t prev = 0;
       for (int i = 0; i < B; ++i) {
@@ -235,7 +217,6 @@ private:
       }
     }
 
-    
     bit_reset(L);
     fill(status.begin(), status.end(), 0);
 
@@ -277,8 +258,6 @@ private:
       }
     }
     if (partial) {
-      
-      
       for (int i = L; i < B; ++i) {
         set_bit(bits, i);
       }
@@ -329,7 +308,6 @@ private:
   }
 };
 
-
 static bool validate_small() {
   struct Check {
     int n;
@@ -340,8 +318,8 @@ static bool validate_small() {
     Solver solver(c.n);
     long long m = solver.compute_M();
     if (m != c.expected) {
-      cerr << "Validation failed: M(" << c.n << ") = " << m
-           << ", expected " << c.expected << "\n";
+      cerr << "Validation failed: M(" << c.n << ") = " << m << ", expected "
+           << c.expected << "\n";
       return false;
     }
   }
@@ -376,7 +354,7 @@ int main() {
   if (num_threads <= 0) {
     num_threads = 4;
   }
-  
+
   num_threads = max(num_threads, 4);
 
   auto worker = [&]() {

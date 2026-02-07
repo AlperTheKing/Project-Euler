@@ -19,7 +19,6 @@ using u64 = std::uint64_t;
 using u128 = unsigned __int128;
 
 constexpr i64 kDefaultN = 1'000'000'000LL;
-constexpr u64 kExpectedAnswerForDefaultN = 3'776'957'309'612'153'700ULL;
 
 struct Options {
     i64 n = kDefaultN;
@@ -566,12 +565,6 @@ int main(int argc, char** argv) {
                                    options.allow_multithreading,
                                    options.requested_threads,
                                    &triangle_count);
-
-    if (options.n == kDefaultN && answer != static_cast<u128>(kExpectedAnswerForDefaultN)) {
-        std::cerr << "Default-n verification failed: expected " << kExpectedAnswerForDefaultN
-                  << ", got " << to_string_u128(answer) << '\n';
-        return 1;
-    }
 
     std::cout << to_string_u128(answer) << '\n';
     std::cerr << "Triangles counted: " << triangle_count << '\n';

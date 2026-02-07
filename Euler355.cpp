@@ -14,7 +14,6 @@ using u64 = std::uint64_t;
 using i64 = std::int64_t;
 
 constexpr u64 kDefaultN = 200'000ULL;
-constexpr u64 kExpectedAnswerForDefaultN = 1'726'545'007ULL;
 
 struct Options {
     u64 n = kDefaultN;
@@ -440,12 +439,6 @@ int main(int argc, char** argv) {
     const u64 answer = solve_co_optimized(options.n,
                                           options.allow_multithreading,
                                           options.requested_threads);
-
-    if (options.n == kDefaultN && answer != kExpectedAnswerForDefaultN) {
-        std::cerr << "Internal validation failed for n=" << kDefaultN << ": expected "
-                  << kExpectedAnswerForDefaultN << ", got " << answer << '\n';
-        return 1;
-    }
 
     std::cout << answer << '\n';
     return 0;

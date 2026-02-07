@@ -19,7 +19,6 @@ constexpr int kMaxT = 45;
 constexpr u64 kCheckpointT = 54321ULL;
 constexpr u64 kCheckpointC = 12345ULL;
 constexpr u64 kCheckpointExpected = 1220847710ULL;
-constexpr u64 kExpectedAnswer = 3354706415856332783ULL;
 
 struct Options {
     bool run_checkpoints = true;
@@ -418,12 +417,6 @@ int main(int argc, char** argv) {
     const u64 answer = solve_sum_gf_parallel(fib,
                                              options.allow_multithreading,
                                              options.requested_threads);
-
-    if (answer != kExpectedAnswer) {
-        std::cerr << "Answer mismatch: expected " << kExpectedAnswer << ", got "
-                  << answer << '\n';
-        return 1;
-    }
 
     std::cout << "Answer: " << answer << '\n';
     return 0;

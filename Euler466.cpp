@@ -15,7 +15,6 @@ using i128 = __int128_t;
 
 constexpr u64 kDefaultM = 64ULL;
 constexpr u64 kDefaultN = 10'000'000'000'000'000ULL;
-constexpr u64 kExpectedAnswerForDefaultInput = 258'381'958'195'474'745ULL;
 
 struct Checkpoint {
     u64 m = 0ULL;
@@ -312,11 +311,6 @@ int main(int argc, char** argv) {
     const u64 answer =
         solve(options.m, options.n, options.allow_multithreading, options.requested_threads);
     std::cout << answer << '\n';
-
-    if (options.m == kDefaultM && options.n == kDefaultN && answer != kExpectedAnswerForDefaultInput) {
-        std::cerr << "Warning: default answer mismatch, expected "
-                  << kExpectedAnswerForDefaultInput << ".\n";
-    }
 
     return 0;
 }

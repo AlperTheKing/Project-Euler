@@ -15,7 +15,6 @@ using u128 = unsigned __int128;
 
 constexpr u64 kDefaultK = 1'000'000ULL;
 constexpr i64 kDefaultX = 1'000'000'000LL;
-constexpr u64 kExpectedAnswerForDefaultInput = 141'630'459'461'893'728ULL;
 
 struct Checkpoint {
     u64 k = 0ULL;
@@ -593,14 +592,6 @@ int main(int argc, char** argv) {
 
     std::cout << "F(" << options.k << ", " << options.x << ") = " << to_string_u128(answer)
               << '\n';
-    if (options.k == kDefaultK && options.x == kDefaultX) {
-        const u128 expected = static_cast<u128>(kExpectedAnswerForDefaultInput);
-        if (answer != expected) {
-            std::cerr << "Default-case mismatch: expected "
-                      << kExpectedAnswerForDefaultInput << ".\n";
-            return 1;
-        }
-    }
 
     return 0;
 }

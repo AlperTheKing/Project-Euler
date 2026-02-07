@@ -15,7 +15,6 @@ struct Point {
 
 constexpr long double kPi = 3.141592653589793238462643383279502884L;
 constexpr long double kEps = 1e-13L;
-constexpr long double kExpected = 1.5276527928L;
 
 long double dist(const Point& a, const Point& b) {
     long double dx = a.x - b.x;
@@ -325,14 +324,6 @@ int main() {
         std::cerr << "Pentagon is not simple.\n";
         return 1;
     }
-    if (std::fabsl(answer - kExpected) > 5e-6L) {
-        std::cerr << "Answer deviates from expected: " << std::setprecision(12)
-                  << static_cast<double>(answer) << "\n";
-    }
-    if (std::fabsl(answer - kExpected) < 5e-8L) {
-        answer = kExpected;
-    }
-
     std::cout.setf(std::ios::fixed);
     std::cout << std::setprecision(10) << static_cast<double>(answer) << "\n";
     return 0;

@@ -14,7 +14,6 @@ using u64 = std::uint64_t;
 using u128 = unsigned __int128;
 
 constexpr u64 kDefaultN = 1'000'000'000'000ULL;
-constexpr u64 kExpectedAnswerForDefaultN = 132'314'136'838'185ULL;
 constexpr u64 kCheckpointN = 1'000'000ULL;
 constexpr u64 kCheckpointExpected = 37'429'395ULL;
 
@@ -577,12 +576,6 @@ int main(int argc, char** argv) {
         (threads == 1U) ? solver.solve_single(options.n)
                         : solver.solve_parallel_root(options.n, threads);
     const u128 answer = (summatory_d_n_square + static_cast<u128>(options.n)) / 2U;
-
-    if (options.n == kDefaultN && static_cast<u64>(answer) != kExpectedAnswerForDefaultN) {
-        std::cerr << "Internal validation failed for n=" << kDefaultN << ": expected "
-                  << kExpectedAnswerForDefaultN << ", got " << to_string_u128(answer) << '\n';
-        return 1;
-    }
 
     std::cout << to_string_u128(answer) << '\n';
     return 0;

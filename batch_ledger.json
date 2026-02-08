@@ -43,6 +43,7 @@
     29,
     30,
     31,
+    32,
     152,
     160,
     167,
@@ -340,7 +341,8 @@
     {
       "batch_index": 4,
       "solved_ids": [
-        31
+        31,
+        32
       ],
       "skipped_ids": [],
       "push_commit": null

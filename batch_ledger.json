@@ -164,6 +164,7 @@
     151,
     152,
     155,
+    156,
     158,
     159,
     160,
@@ -471,13 +472,6 @@
     },
     {
       "id": 154,
-      "attempts": 1,
-      "last_error": "deferred in current batch due complexity/runtime budget",
-      "last_attempt_utc": "2026-02-08T18:40:41+00:00",
-      "last_batch": 15
-    },
-    {
-      "id": 156,
       "attempts": 1,
       "last_error": "deferred in current batch due complexity/runtime budget",
       "last_attempt_utc": "2026-02-08T18:40:41+00:00",
@@ -982,7 +976,8 @@
     {
       "batch_index": 21,
       "solved_ids": [
-        147
+        147,
+        156
       ],
       "skipped_ids": [],
       "push_commit": null

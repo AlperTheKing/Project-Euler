@@ -236,6 +236,7 @@
     225,
     226,
     227,
+    228,
     229,
     230,
     231,
@@ -485,18 +486,60 @@
   ],
   "blocked": [
     {
-      "id": 154,
+      "id": 224,
       "attempts": 1,
       "last_error": "deferred in current batch due complexity/runtime budget",
-      "last_attempt_utc": "2026-02-08T18:40:41+00:00",
-      "last_batch": 15
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
+    },
+    {
+      "id": 254,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
+    },
+    {
+      "id": 256,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
+    },
+    {
+      "id": 257,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
+    },
+    {
+      "id": 261,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
+    },
+    {
+      "id": 264,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
+    },
+    {
+      "id": 154,
+      "attempts": 2,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
     },
     {
       "id": 163,
-      "attempts": 1,
+      "attempts": 2,
       "last_error": "deferred in current batch due complexity/runtime budget",
-      "last_attempt_utc": "2026-02-08T18:47:02+00:00",
-      "last_batch": 16
+      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
+      "last_batch": 24
     }
   ],
   "batches": [
@@ -917,6 +960,23 @@
         237
       ],
       "skipped_ids": [],
+      "push_commit": null
+    },
+    {
+      "batch_index": 24,
+      "solved_ids": [
+        228
+      ],
+      "skipped_ids": [
+        154,
+        163,
+        224,
+        254,
+        256,
+        257,
+        261,
+        264
+      ],
       "push_commit": null
     }
   ]

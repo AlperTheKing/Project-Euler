@@ -184,6 +184,7 @@
     179,
     180,
     181,
+    182,
     183,
     188,
     190,
@@ -520,13 +521,6 @@
     },
     {
       "id": 178,
-      "attempts": 1,
-      "last_error": "deferred in current batch due complexity/runtime budget",
-      "last_attempt_utc": "2026-02-08T18:47:02+00:00",
-      "last_batch": 16
-    },
-    {
-      "id": 182,
       "attempts": 1,
       "last_error": "deferred in current batch due complexity/runtime budget",
       "last_attempt_utc": "2026-02-08T18:47:02+00:00",
@@ -947,7 +941,8 @@
         165,
         166,
         175,
-        181
+        181,
+        182
       ],
       "skipped_ids": [],
       "push_commit": null

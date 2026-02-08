@@ -153,6 +153,7 @@
     139,
     140,
     141,
+    142,
     144,
     145,
     148,
@@ -435,13 +436,6 @@
     983
   ],
   "blocked": [
-    {
-      "id": 142,
-      "attempts": 1,
-      "last_error": "deferred in current batch due complexity/runtime budget",
-      "last_attempt_utc": "2026-02-08T18:40:41+00:00",
-      "last_batch": 15
-    },
     {
       "id": 143,
       "attempts": 1,
@@ -949,7 +943,8 @@
     {
       "batch_index": 19,
       "solved_ids": [
-        141
+        141,
+        142
       ],
       "skipped_ids": [],
       "push_commit": null

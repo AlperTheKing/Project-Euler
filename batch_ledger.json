@@ -13,6 +13,7 @@
   ],
   "completed_ids": [
     1,
+    2,
     152,
     160,
     167,
@@ -259,7 +260,8 @@
     {
       "batch_index": 1,
       "solved_ids": [
-        1
+        1,
+        2
       ],
       "skipped_ids": [],
       "push_commit": null

@@ -83,6 +83,7 @@
     69,
     70,
     71,
+    72,
     152,
     160,
     167,
@@ -448,7 +449,8 @@
     {
       "batch_index": 8,
       "solved_ids": [
-        71
+        71,
+        72
       ],
       "skipped_ids": [],
       "push_commit": null

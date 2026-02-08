@@ -172,6 +172,9 @@ def active_batch_index(ledger: Dict) -> int:
     tail = max(ledger["batches"], key=lambda x: x["batch_index"])
     if tail.get("push_commit"):
         return tail["batch_index"] + 1
+    if len(tail.get("solved_ids", [])) >= int(ledger.get("batch_size", 10)):
+        # Allow forward progress even if push marker is filled later.
+        return tail["batch_index"] + 1
     return tail["batch_index"]
 
 

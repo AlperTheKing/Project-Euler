@@ -371,6 +371,7 @@
     447,
     448,
     450,
+    451,
     453,
     459,
     465,
@@ -525,20 +526,6 @@
   ],
   "blocked": [
     {
-      "id": 256,
-      "attempts": 1,
-      "last_error": "deferred in current batch due complexity/runtime budget",
-      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
-      "last_batch": 24
-    },
-    {
-      "id": 257,
-      "attempts": 1,
-      "last_error": "deferred in current batch due complexity/runtime budget",
-      "last_attempt_utc": "2026-02-08T21:18:53+00:00",
-      "last_batch": 24
-    },
-    {
       "id": 261,
       "attempts": 1,
       "last_error": "deferred in current batch due complexity/runtime budget",
@@ -665,6 +652,62 @@
       "last_batch": 27
     },
     {
+      "id": 324,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 326,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 332,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 334,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 336,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 341,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 342,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 350,
+      "attempts": 1,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
       "id": 154,
       "attempts": 2,
       "last_error": "deferred in current batch due complexity/runtime budget",
@@ -691,6 +734,20 @@
       "last_error": "deferred in current batch due complexity/runtime budget",
       "last_attempt_utc": "2026-02-08T23:37:02+00:00",
       "last_batch": 27
+    },
+    {
+      "id": 256,
+      "attempts": 2,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
+    },
+    {
+      "id": 257,
+      "attempts": 2,
+      "last_error": "deferred in current batch due complexity/runtime budget",
+      "last_attempt_utc": "2026-02-09T04:54:34+00:00",
+      "last_batch": 28
     }
   ],
   "batches": [
@@ -1207,6 +1264,25 @@
         312,
         316,
         320
+      ],
+      "push_commit": null
+    },
+    {
+      "batch_index": 28,
+      "solved_ids": [
+        451
+      ],
+      "skipped_ids": [
+        256,
+        257,
+        324,
+        326,
+        332,
+        334,
+        336,
+        341,
+        342,
+        350
       ],
       "push_commit": null
     }

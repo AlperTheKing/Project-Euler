@@ -2,6 +2,8 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -84,6 +86,13 @@ void run_validations() {
 int main() {
     run_validations();
     const ld answer = G(12, 12);
-    std::cout << std::scientific << std::setprecision(12) << answer << '\n';
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(12) << answer;
+    std::string s = out.str();
+    const std::size_t epos = s.find('e');
+    if (epos != std::string::npos && epos + 1 < s.size() && s[epos + 1] == '+') {
+        s.erase(epos + 1, 1);
+    }
+    std::cout << s << '\n';
     return 0;
 }

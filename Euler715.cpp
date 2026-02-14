@@ -1,79 +1,46 @@
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
-#include <functional>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <string>
+#include <atomic>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace {
 
-using u64 = std::uint64_t;
-using u128 = __uint128_t;
+using i64 = long long;
+using i128 = __int128_t;
 
-constexpr u64 kMod = 1'000'000'007ULL;
-constexpr u64 kDefaultN = 1'000'000'000'000ULL;
-constexpr u64 kCheckpointN1 = 10ULL;
-constexpr u64 kCheckpointExpected1 = 3'053ULL;
-constexpr u64 kCheckpointN2 = 100'000ULL;
-constexpr u64 kCheckpointExpected2 = 157'612'967ULL;
+constexpr i64 kMod = 1'000'000'007LL;
+constexpr i64 kDefaultN = 1'000'000'000'000LL;
+constexpr i64 kCheckpointN1 = 10LL;
+constexpr i64 kCheckpointExpected1 = 3'053LL;
+constexpr i64 kCheckpointN2 = 100'000LL;
+constexpr i64 kCheckpointExpected2 = 157'612'967LL;
 
 struct Options {
-    u64 n = kDefaultN;
+    i64 n = kDefaultN;
     bool run_checkpoints = true;
-    bool allow_multithreading = true;
-    unsigned requested_threads = 0U;
 };
 
-struct U64Hash {
-    std::size_t operator()(const u64 value) const noexcept {
-        u64 x = value + 0x9e3779b97f4a7c15ULL;
-        x = (x ^ (x >> 30U)) * 0xbf58476d1ce4e5b9ULL;
-        x = (x ^ (x >> 27U)) * 0x94d049bb133111ebULL;
-        x ^= (x >> 31U);
-        return static_cast<std::size_t>(x);
-    }
-};
-
-bool parse_u64_after_prefix(const std::string& arg, const std::string& prefix, u64& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
-    }
+bool parse_u64_after_prefix(const std::string& arg, const std::string& prefix, i64& value) {
+    if (arg.rfind(prefix, 0U) != 0U) return false;
     const std::string tail = arg.substr(prefix.size());
-    if (tail.empty()) {
-        return false;
-    }
+    if (tail.empty()) return false;
 
-    u64 parsed = 0ULL;
+    unsigned long long parsed = 0ULL;
     for (const char ch : tail) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        const u64 digit = static_cast<u64>(ch - '0');
-        if (parsed > (std::numeric_limits<u64>::max() - digit) / 10ULL) {
-            return false;
-        }
+        if (ch < '0' || ch > '9') return false;
+        const unsigned long long digit = static_cast<unsigned long long>(ch - '0');
+        if (parsed > (std::numeric_limits<unsigned long long>::max() - digit) / 10ULL) return false;
         parsed = parsed * 10ULL + digit;
     }
-
-    value = parsed;
-    return true;
-}
-
-bool parse_unsigned_after_prefix(const std::string& arg,
-                                 const std::string& prefix,
-                                 unsigned& value) {
-    u64 parsed = 0ULL;
-    if (!parse_u64_after_prefix(arg, prefix, parsed)) {
-        return false;
-    }
-    if (parsed > static_cast<u64>(std::numeric_limits<unsigned>::max())) {
-        return false;
-    }
-    value = static_cast<unsigned>(parsed);
+    if (parsed > static_cast<unsigned long long>(std::numeric_limits<i64>::max())) return false;
+    value = static_cast<i64>(parsed);
     return true;
 }
 
@@ -84,463 +51,268 @@ bool parse_arguments(const int argc, char** argv, Options& options) {
             options.run_checkpoints = false;
             continue;
         }
-        if (arg == "--single-thread") {
-            options.allow_multithreading = false;
-            continue;
-        }
         if (parse_u64_after_prefix(arg, "--n=", options.n)) {
             continue;
         }
-        if (parse_unsigned_after_prefix(arg, "--threads=", options.requested_threads)) {
-            continue;
-        }
-
         std::cerr << "Unknown argument: " << arg << '\n';
         return false;
     }
-
-    return true;
+    return options.n >= 1;
 }
 
-unsigned pick_thread_count(const bool allow_multithreading, const unsigned requested_threads) {
-    if (!allow_multithreading) {
-        return 1U;
-    }
-    if (requested_threads > 0U) {
-        return std::max(1U, requested_threads);
-    }
-    unsigned hw = std::thread::hardware_concurrency();
-    if (hw == 0U) {
-        hw = 4U;
-    }
-    return hw;
+inline i64 mod_norm(i64 x) {
+    x %= kMod;
+    if (x < 0) x += kMod;
+    return x;
 }
 
-u64 isqrt_u64(const u64 x) {
-    u64 r = static_cast<u64>(std::sqrt(static_cast<long double>(x)));
-    while ((r + 1ULL) <= x / (r + 1ULL)) {
-        ++r;
-    }
-    while (r > x / r) {
-        --r;
-    }
-    return r;
+inline i64 mod_add(i64 a, i64 b) {
+    i64 s = a + b;
+    if (s >= kMod) s -= kMod;
+    return s;
 }
 
-inline u64 add_mod(const u64 a, const u64 b) {
-    const u64 s = a + b;
-    return (s >= kMod) ? (s - kMod) : s;
+inline i64 mod_mul(i64 a, i64 b) {
+    return static_cast<i64>((static_cast<i128>(a) * b) % kMod);
 }
 
-inline u64 sub_mod(const u64 a, const u64 b) {
-    return (a >= b) ? (a - b) : (a + kMod - b);
-}
-
-inline u64 mul_mod(const u64 a, const u64 b) {
-    return static_cast<u64>((static_cast<u128>(a) * static_cast<u128>(b)) % static_cast<u128>(kMod));
-}
-
-int chi4(const u64 n) {
-    if ((n & 1ULL) == 0ULL) {
-        return 0;
-    }
-    return ((n & 3ULL) == 1ULL) ? 1 : -1;
-}
-
-u64 sum_cubes_1_to_mod(const u64 n) {
-    const u128 a = (static_cast<u128>(n) * static_cast<u128>(n + 1ULL)) / static_cast<u128>(2ULL);
-    const u64 am = static_cast<u64>(a % static_cast<u128>(kMod));
-    return mul_mod(am, am);
-}
-
-u64 prefix_chi_1_to_mod(const u64 n) {
-    if (n == 0ULL) {
-        return 0ULL;
-    }
-    const u64 r = n & 3ULL;
-    return ((r == 1ULL) || (r == 2ULL)) ? 1ULL : 0ULL;
-}
-
-std::vector<int> sieve_primes(const int limit) {
-    if (limit < 2) {
-        return {};
-    }
-
-    const int size = limit / 2 + 1;
-    std::vector<std::uint8_t> is_prime(static_cast<std::size_t>(size), 1U);
-    is_prime[0] = 0U;  // 1 is not prime
-
-    const int root = static_cast<int>(std::sqrt(static_cast<long double>(limit)));
-    for (int i = 1; (2 * i + 1) <= root; ++i) {
-        if (is_prime[static_cast<std::size_t>(i)] == 0U) {
-            continue;
-        }
-        const int p = 2 * i + 1;
-        int start = (p * p) / 2;
-        for (int j = start; j < size; j += p) {
-            is_prime[static_cast<std::size_t>(j)] = 0U;
-        }
+std::vector<int> sieve_primes(const int n) {
+    std::vector<char> is_prime(static_cast<std::size_t>(n + 1), 1);
+    if (n >= 0) is_prime[0] = 0;
+    if (n >= 1) is_prime[1] = 0;
+    for (int i = 2; 1LL * i * i <= n; ++i) {
+        if (!is_prime[static_cast<std::size_t>(i)]) continue;
+        for (int j = i * i; j <= n; j += i) is_prime[static_cast<std::size_t>(j)] = 0;
     }
 
     std::vector<int> primes;
-    primes.reserve(static_cast<std::size_t>(limit / std::max(1.0L, std::log(static_cast<long double>(limit)))));
-    primes.push_back(2);
-    for (int i = 1; i < size; ++i) {
-        if (is_prime[static_cast<std::size_t>(i)] != 0U) {
-            primes.push_back(2 * i + 1);
-        }
+    for (int i = 2; i <= n; ++i) {
+        if (is_prime[static_cast<std::size_t>(i)]) primes.push_back(i);
     }
     return primes;
 }
 
-struct ValuesIndex {
-    std::vector<u64> values;
-    u64 root = 0ULL;
-    std::vector<int> idx_small;
-    std::vector<int> idx_large;
+std::pair<std::vector<i64>, std::vector<i64>> sum_prime_cubes(
+    const i64 n,
+    const int L,
+    const int XL,
+    const std::vector<int>& primes
+) {
+    std::vector<i64> V(static_cast<std::size_t>(XL), 0);
+    i64 s = -1;
+    for (int i = 1; i < XL; ++i) {
+        const i64 ii = i;
+        s = mod_norm(s + mod_mul(mod_mul(ii % kMod, ii % kMod), ii % kMod));
+        V[static_cast<std::size_t>(i)] = s;
+    }
 
-    int index_of(const u64 n, const u64 x) const {
-        if (x <= root) {
-            return idx_small[static_cast<std::size_t>(x)];
+    std::vector<i64> bigV(static_cast<std::size_t>(L + 1), 0);
+    const i64 mod2 = kMod * 2LL;
+    for (int i = 1; i <= L; ++i) {
+        const i64 x = (n / i) % mod2;
+        const i64 y = static_cast<i64>((static_cast<i128>(x) * (x + 1LL) % mod2) / 2);
+        bigV[static_cast<std::size_t>(i)] = mod_norm(mod_mul(y % kMod, y % kMod) - 1);
+    }
+
+    for (const int p : primes) {
+        const i64 sp = V[static_cast<std::size_t>(p - 1)];
+        const i64 p_sq = 1LL * p * p;
+        const i64 p3 = mod_mul(p % kMod, mod_mul(p % kMod, p % kMod));
+        const i64 y = n / p;
+        const int iL = static_cast<int>(std::min<i64>(y / p, L));
+
+        for (int i = 1; i <= iL; ++i) {
+            const i64 z = y / i;
+            const i64 v = (z < XL) ? V[static_cast<std::size_t>(z)] : bigV[static_cast<std::size_t>(i * p)];
+            bigV[static_cast<std::size_t>(i)] = mod_norm(
+                bigV[static_cast<std::size_t>(i)] - mod_mul(p3, mod_norm(v - sp)));
         }
-        return idx_large[static_cast<std::size_t>(n / x)];
+
+        for (int x = XL - 1; x > 0; --x) {
+            if (x < p_sq) break;
+            const int z = x / p;
+            V[static_cast<std::size_t>(x)] = mod_norm(
+                V[static_cast<std::size_t>(x)] - mod_mul(p3, mod_norm(V[static_cast<std::size_t>(z)] - sp)));
+        }
+    }
+
+    return {std::move(V), std::move(bigV)};
+}
+
+std::pair<std::vector<i64>, std::vector<i64>> prime_balance_mod4(
+    const i64 n,
+    const int L,
+    const int XL,
+    const std::vector<int>& primes
+) {
+    std::vector<i64> V(static_cast<std::size_t>(XL), 0);
+    for (int i = 3; i < XL; i += 4) V[static_cast<std::size_t>(i)] = -1;
+    for (int i = 4; i < XL; i += 4) V[static_cast<std::size_t>(i)] = -1;
+
+    std::vector<i64> bigV(static_cast<std::size_t>(L + 1), 0);
+    for (int i = 1; i <= L; ++i) {
+        if (((n / i - 1) % 4) >= 2) bigV[static_cast<std::size_t>(i)] = -1;
+    }
+
+    for (std::size_t idx = 1; idx < primes.size(); ++idx) {
+        const int p = primes[idx];
+        const i64 sp = V[static_cast<std::size_t>(p - 1)];
+        const i64 y = n / p;
+        const int iL = static_cast<int>(std::min<i64>(y / p, L));
+        const i64 f = 2 - (p % 4);
+
+        for (int i = 1; i <= iL; ++i) {
+            const i64 z = y / i;
+            if (z < XL) {
+                bigV[static_cast<std::size_t>(i)] -= f * (V[static_cast<std::size_t>(z)] - sp);
+            } else {
+                bigV[static_cast<std::size_t>(i)] -= f * (bigV[static_cast<std::size_t>(i * p)] - sp);
+            }
+        }
+
+        const i64 p_sq = 1LL * p * p;
+        for (int x = XL - 1; x > 0; --x) {
+            if (x < p_sq) break;
+            const int z = x / p;
+            V[static_cast<std::size_t>(x)] -= f * (V[static_cast<std::size_t>(z)] - sp);
+        }
+    }
+
+    return {std::move(V), std::move(bigV)};
+}
+
+struct DfsContext {
+    const std::vector<int>& primes;
+    const std::vector<i64>& p2;
+    const std::vector<i64>& p3;
+    int L = 0;
+    const std::vector<i64>& V;
+    const std::vector<i64>& bigV;
+
+    i64 dfs_branch(const int i, const i64 n0, const i64 x0) const {
+        const i64 p_sq = p2[static_cast<std::size_t>(i)];
+        if (n0 < p_sq) return 0;
+
+        const i64 p = primes[static_cast<std::size_t>(i)];
+        const i64 p_cubed = p3[static_cast<std::size_t>(i)];
+        i64 n = n0 / p;
+        i64 x = x0 * p;
+        i64 f = mod_norm(p_cubed + (p % 4) - 2);
+        i64 res = 0;
+
+        const i64 pref = (x <= L) ? bigV[static_cast<std::size_t>(x)] : V[static_cast<std::size_t>(n)];
+        res = mod_add(res, mod_mul(f, mod_norm(pref - V[static_cast<std::size_t>(p)])));
+
+        while (true) {
+            if (n > p_sq) {
+                res = mod_add(res, mod_mul(f, dfs(i + 1, n, x)));
+            }
+            n /= p;
+            if (n == 0) break;
+
+            x *= p;
+            f = mod_mul(f, p_cubed);
+            res = mod_add(res, f);
+
+            if (n > p) {
+                const i64 pref2 = (x <= L) ? bigV[static_cast<std::size_t>(x)] : V[static_cast<std::size_t>(n)];
+                res = mod_add(res, mod_mul(f, mod_norm(pref2 - V[static_cast<std::size_t>(p)])));
+            }
+        }
+        return res;
+    }
+
+    i64 dfs(const int i0, const i64 n0, const i64 x0) const {
+        i64 res = 0;
+        for (int i = i0; i < static_cast<int>(primes.size()); ++i) {
+            if (n0 < p2[static_cast<std::size_t>(i)]) break;
+            res = mod_add(res, dfs_branch(i, n0, x0));
+        }
+        return res;
     }
 };
 
-ValuesIndex build_values_and_index(const u64 n) {
-    ValuesIndex out;
-    out.root = isqrt_u64(n);
+i64 solve(const i64 n) {
+    const int L = static_cast<int>(std::sqrt(static_cast<long double>(n) + 0.5L));
+    const int XL = static_cast<int>(n / L) + 1;
+    const std::vector<int> primes = sieve_primes(L);
 
-    std::vector<u64> large;
-    large.reserve(static_cast<std::size_t>(2ULL * out.root + 16ULL));
-    for (u64 i = 1ULL; i <= n;) {
-        const u64 v = n / i;
-        large.push_back(v);
-        i = n / v + 1ULL;
-    }
-
-    std::vector<u64> small;
-    small.reserve(static_cast<std::size_t>(out.root));
-    for (u64 v = out.root; v >= 1ULL; --v) {
-        small.push_back(v);
-    }
-
-    out.values.reserve(large.size() + small.size());
-    std::size_t ia = 0U;
-    std::size_t ib = 0U;
-    while (ia < large.size() && ib < small.size()) {
-        const u64 a = large[ia];
-        const u64 b = small[ib];
-        if (a > b) {
-            out.values.push_back(a);
-            ++ia;
-        } else if (a < b) {
-            out.values.push_back(b);
-            ++ib;
-        } else {
-            out.values.push_back(a);
-            ++ia;
-            ++ib;
-        }
-    }
-    while (ia < large.size()) {
-        out.values.push_back(large[ia++]);
-    }
-    while (ib < small.size()) {
-        out.values.push_back(small[ib++]);
-    }
-
-    out.idx_small.assign(static_cast<std::size_t>(out.root + 1ULL), 0);
-    out.idx_large.assign(static_cast<std::size_t>(out.root + 1ULL), 0);
-
-    for (std::size_t idx = 0; idx < out.values.size(); ++idx) {
-        const u64 v = out.values[idx];
-        if (v <= out.root) {
-            out.idx_small[static_cast<std::size_t>(v)] = static_cast<int>(idx);
-        } else {
-            out.idx_large[static_cast<std::size_t>(n / v)] = static_cast<int>(idx);
-        }
-    }
-
-    return out;
-}
-
-void parallel_chunked_for(const unsigned threads,
-                          const std::size_t begin,
-                          const std::size_t end,
-                          const std::function<void(std::size_t, std::size_t)>& work) {
-    if (threads <= 1U || end <= begin + 1U) {
-        work(begin, end);
-        return;
-    }
-
-    const std::size_t length = end - begin;
-    const unsigned use_threads = std::min<unsigned>(threads, static_cast<unsigned>(length));
-    if (use_threads <= 1U) {
-        work(begin, end);
-        return;
-    }
-
-    std::vector<std::thread> pool;
-    pool.reserve(static_cast<std::size_t>(use_threads));
-
-    std::size_t chunk_begin = begin;
-    for (unsigned t = 0U; t < use_threads; ++t) {
-        const std::size_t remaining = end - chunk_begin;
-        const std::size_t lanes = static_cast<std::size_t>(use_threads - t);
-        const std::size_t chunk_size = (remaining + lanes - 1U) / lanes;
-        const std::size_t chunk_end = chunk_begin + chunk_size;
-        pool.emplace_back([&, chunk_begin, chunk_end]() { work(chunk_begin, chunk_end); });
-        chunk_begin = chunk_end;
-    }
-
-    for (std::thread& th : pool) {
-        th.join();
-    }
-}
-
-struct PrimeSumData {
-    ValuesIndex index;
-    std::vector<u64> gprime;
-};
-
-PrimeSumData compute_prime_sums_gprime(const u64 n,
-                                       const std::vector<int>& primes,
-                                       const unsigned threads) {
-    PrimeSumData out;
-    out.index = build_values_and_index(n);
-    const std::size_t m = out.index.values.size();
-
-    std::vector<u64> gcube(m, 0ULL);
-    std::vector<u64> gchi(m, 0ULL);
-
-    parallel_chunked_for(threads, 0U, m, [&](const std::size_t left, const std::size_t right) {
-        for (std::size_t i = left; i < right; ++i) {
-            const u64 v = out.index.values[i];
-            gcube[i] = sub_mod(sum_cubes_1_to_mod(v), 1ULL);      // sum_{k=2..v} k^3
-            gchi[i] = sub_mod(prefix_chi_1_to_mod(v), 1ULL);      // sum_{k=2..v} chi(k)
-        }
+    auto fut_prime_balance = std::async(std::launch::async, [&]() {
+        return prime_balance_mod4(n, L, XL, primes);
     });
+    auto [V1, bigV1] = sum_prime_cubes(n, L, XL, primes);
+    auto [V2, bigV2] = fut_prime_balance.get();
 
-    std::size_t limit = m;
-    for (const int p_int : primes) {
-        const u64 p = static_cast<u64>(p_int);
-        const u64 p2 = p * p;
-        if (p2 > n) {
-            break;
-        }
-
-        while (limit > 0U && out.index.values[limit - 1U] < p2) {
-            --limit;
-        }
-        if (limit == 0U) {
-            break;
-        }
-
-        const int ipm1 = out.index.idx_small[static_cast<std::size_t>(p - 1ULL)];
-        const u64 gc_pm1 = gcube[static_cast<std::size_t>(ipm1)];
-        const u64 gh_pm1 = gchi[static_cast<std::size_t>(ipm1)];
-
-        const u64 p_mod = p % kMod;
-        const u64 p3 = mul_mod(mul_mod(p_mod, p_mod), p_mod);
-        const int chip = chi4(p);
-
-        auto update_range = [&](const std::size_t left, const std::size_t right) {
-            for (std::size_t i = left; i < right; ++i) {
-                const u64 v = out.index.values[i];
-                const u64 u = v / p;
-                const int iu = (u <= out.index.root)
-                                   ? out.index.idx_small[static_cast<std::size_t>(u)]
-                                   : out.index.idx_large[static_cast<std::size_t>(n / u)];
-
-                const u64 delta_cube = sub_mod(gcube[static_cast<std::size_t>(iu)], gc_pm1);
-                gcube[i] = sub_mod(gcube[i], mul_mod(p3, delta_cube));
-
-                if (chip != 0) {
-                    const u64 delta_chi = sub_mod(gchi[static_cast<std::size_t>(iu)], gh_pm1);
-                    if (chip > 0) {
-                        gchi[i] = sub_mod(gchi[i], delta_chi);
-                    } else {
-                        gchi[i] = add_mod(gchi[i], delta_chi);
-                    }
-                }
-            }
-        };
-
-        update_range(0U, limit);
+    std::vector<i64> V(static_cast<std::size_t>(XL), 0);
+    for (int i = 0; i < XL; ++i) {
+        V[static_cast<std::size_t>(i)] = mod_norm(
+            V1[static_cast<std::size_t>(i)] - mod_norm(V2[static_cast<std::size_t>(i)]));
     }
 
-    out.gprime.assign(m, 0ULL);
-    parallel_chunked_for(threads, 0U, m, [&](const std::size_t left, const std::size_t right) {
-        for (std::size_t i = left; i < right; ++i) {
-            out.gprime[i] = sub_mod(gcube[i], gchi[i]);
-        }
-    });
+    std::vector<i64> bigV(static_cast<std::size_t>(L + 1), 0);
+    for (int i = 0; i <= L; ++i) {
+        bigV[static_cast<std::size_t>(i)] = mod_norm(
+            bigV1[static_cast<std::size_t>(i)] - mod_norm(bigV2[static_cast<std::size_t>(i)]));
+    }
 
-    return out;
+    std::vector<i64> p2(primes.size(), 0);
+    std::vector<i64> p3(primes.size(), 0);
+    for (std::size_t i = 0; i < primes.size(); ++i) {
+        const i64 p = primes[i];
+        p2[i] = p * p;
+        p3[i] = mod_mul(p % kMod, mod_mul(p % kMod, p % kMod));
+    }
+
+    const DfsContext ctx{primes, p2, p3, L, V, bigV};
+
+    int root_end = 0;
+    while (root_end < static_cast<int>(primes.size()) && p2[static_cast<std::size_t>(root_end)] <= n) {
+        ++root_end;
+    }
+
+    if (root_end == 0) {
+        return mod_norm(1 + bigV[1]);
+    }
+
+    unsigned int threads = std::thread::hardware_concurrency();
+    if (threads == 0) threads = 1;
+    threads = std::min<unsigned int>(threads, static_cast<unsigned int>(root_end));
+    if (threads == 1) {
+        return mod_norm(1 + bigV[1] + ctx.dfs(0, n, 1));
+    }
+
+    std::atomic<int> next_idx(0);
+    std::vector<i64> partial(static_cast<std::size_t>(threads), 0);
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(threads));
+
+    for (unsigned int tid = 0; tid < threads; ++tid) {
+        workers.emplace_back([&, tid]() {
+            i64 local = 0;
+            while (true) {
+                const int i = next_idx.fetch_add(1, std::memory_order_relaxed);
+                if (i >= root_end) break;
+                local = mod_add(local, ctx.dfs_branch(i, n, 1));
+            }
+            partial[static_cast<std::size_t>(tid)] = local;
+        });
+    }
+    for (auto& th : workers) th.join();
+
+    i64 dfs_total = 0;
+    for (const i64 v : partial) dfs_total = mod_add(dfs_total, v);
+    return mod_norm(1 + bigV[1] + dfs_total);
 }
 
-class Euler715Solver {
-public:
-    Euler715Solver(const u64 n, const unsigned threads)
-        : n_(n),
-          root_(isqrt_u64(n_)),
-          primes_(sieve_primes(static_cast<int>(root_))) {
-        const PrimeSumData sums = compute_prime_sums_gprime(n_, primes_, threads);
-        index_ = sums.index;
-        gprime_ = sums.gprime;
-
-        p_count_ = static_cast<int>(primes_.size());
-        base_ = static_cast<u64>(p_count_ + 1);
-        memo_.reserve(1 << 20);
+bool run_checkpoints() {
+    if (solve(kCheckpointN1) != kCheckpointExpected1) {
+        std::cerr << "Validation failed: G(10)\n";
+        return false;
     }
-
-    u64 solve() {
-        return summatory_with_prime_floor(n_, 0);
+    if (solve(kCheckpointN2) != kCheckpointExpected2) {
+        std::cerr << "Validation failed: G(10^5)\n";
+        return false;
     }
-
-private:
-    u64 n_ = 0ULL;
-    u64 root_ = 0ULL;
-    std::vector<int> primes_;
-    ValuesIndex index_;
-    std::vector<u64> gprime_;
-    int p_count_ = 0;
-    u64 base_ = 1ULL;
-    std::unordered_map<u64, u64, U64Hash> memo_;
-
-    int index_of(const u64 x) const {
-        if (x <= root_) {
-            return index_.idx_small[static_cast<std::size_t>(x)];
-        }
-        return index_.idx_large[static_cast<std::size_t>(n_ / x)];
-    }
-
-    u64 prime_sum_upto(const u64 x) const {
-        if (x < 2ULL) {
-            return 0ULL;
-        }
-        return gprime_[static_cast<std::size_t>(index_of(x))];
-    }
-
-    u64 prime_sum_range(const u64 lo, const u64 hi) const {
-        if (hi <= lo) {
-            return 0ULL;
-        }
-        return sub_mod(prime_sum_upto(hi), prime_sum_upto(lo));
-    }
-
-    static u64 g_prime(const u64 p) {
-        const u64 p_mod = p % kMod;
-        const u64 p3 = mul_mod(mul_mod(p_mod, p_mod), p_mod);
-        const int ch = chi4(p);
-        if (ch == 1) {
-            return sub_mod(p3, 1ULL);
-        }
-        if (ch == -1) {
-            return add_mod(p3, 1ULL);
-        }
-        return p3;
-    }
-
-    u64 summatory_with_prime_floor(const u64 n, const int idx) {
-        if (n < 2ULL) {
-            return 1ULL;
-        }
-
-        if (idx >= p_count_) {
-            const u64 lo = (p_count_ == 0) ? 1ULL
-                                           : static_cast<u64>(
-                                                 primes_[static_cast<std::size_t>(p_count_ - 1)]);
-            return add_mod(1ULL, prime_sum_range(lo, n));
-        }
-
-        const u64 p0 = static_cast<u64>(primes_[static_cast<std::size_t>(idx)]);
-        if (p0 > n) {
-            return 1ULL;
-        }
-
-        const u64 key = n * base_ + static_cast<u64>(idx);
-        const auto it = memo_.find(key);
-        if (it != memo_.end()) {
-            return it->second;
-        }
-
-        const u64 lo = (idx > 0) ? static_cast<u64>(primes_[static_cast<std::size_t>(idx - 1)]) : 1ULL;
-        if (p0 > n / p0) {
-            const u64 res = add_mod(1ULL, prime_sum_range(lo, n));
-            memo_.emplace(key, res);
-            return res;
-        }
-
-        u64 result = add_mod(1ULL, prime_sum_range(lo, n));
-
-        for (int j = idx; j < p_count_; ++j) {
-            const u64 p = static_cast<u64>(primes_[static_cast<std::size_t>(j)]);
-            const u64 p2 = p * p;
-            if (p2 > n) {
-                break;
-            }
-
-            const u64 gp1 = g_prime(p);
-            const u64 sub = sub_mod(summatory_with_prime_floor(n / p, j + 1), 1ULL);
-            result = add_mod(result, mul_mod(gp1, sub));
-
-            const int sign = chi4(p);
-            const u64 p_mod = p % kMod;
-            const u64 p3 = mul_mod(mul_mod(p_mod, p_mod), p_mod);
-
-            u64 prev = p3;              // p^(3*1)
-            u64 cur = mul_mod(prev, p3);  // p^(3*2)
-            u64 pe = p2;
-
-            while (pe <= n) {
-                u64 gp = 0ULL;
-                if (sign == 1) {
-                    gp = sub_mod(cur, prev);
-                } else if (sign == -1) {
-                    gp = add_mod(cur, prev);
-                } else {
-                    gp = cur;
-                }
-
-                result = add_mod(result, mul_mod(gp, summatory_with_prime_floor(n / pe, j + 1)));
-
-                if (pe > n / p) {
-                    break;
-                }
-                pe *= p;
-                prev = cur;
-                cur = mul_mod(cur, p3);
-            }
-        }
-
-        memo_.emplace(key, result);
-        return result;
-    }
-};
-
-bool run_checkpoints(const unsigned threads) {
-    {
-        Euler715Solver solver(kCheckpointN1, threads);
-        const u64 got = solver.solve();
-        if (got != kCheckpointExpected1) {
-            std::cerr << "Validation failed: G(10) expected " << kCheckpointExpected1
-                      << ", got " << got << '\n';
-            return false;
-        }
-    }
-
-    {
-        Euler715Solver solver(kCheckpointN2, threads);
-        const u64 got = solver.solve();
-        if (got != kCheckpointExpected2) {
-            std::cerr << "Validation failed: G(10^5) expected " << kCheckpointExpected2
-                      << ", got " << got << '\n';
-            return false;
-        }
-    }
-
     return true;
 }
 
@@ -551,17 +323,9 @@ int main(int argc, char** argv) {
     if (!parse_arguments(argc, argv, options)) {
         return 1;
     }
-
-    const unsigned threads = pick_thread_count(options.allow_multithreading, options.requested_threads);
-
-    if (options.run_checkpoints) {
-        if (!run_checkpoints(threads)) {
-            return 1;
-        }
+    if (options.run_checkpoints && !run_checkpoints()) {
+        return 1;
     }
-
-    Euler715Solver solver(options.n, threads);
-    const u64 answer = solver.solve();
-    std::cout << answer << '\n';
+    std::cout << solve(options.n) << '\n';
     return 0;
 }

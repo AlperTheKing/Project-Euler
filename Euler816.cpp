@@ -7,6 +7,8 @@
 #include <limits>
 #include <set>
 #include <vector>
+#include <array>
+#include <functional>
 
 struct Point {
     int x;

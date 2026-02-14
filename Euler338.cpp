@@ -5,6 +5,8 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 using int64 = long long;
 using i128 = __int128_t;

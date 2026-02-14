@@ -1,6 +1,8 @@
 #include <cstdint>
 #include <iostream>
 #include <unordered_map>
+#include <functional>
+#include <vector>
 
 using namespace std;
 

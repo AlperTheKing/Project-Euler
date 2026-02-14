@@ -21,6 +21,9 @@ i64 isqrt_i64(const i64 n) {
 }
 
 i64 F_formula(const int p, const std::vector<i64>& twenty_seven_u2) {
+    if (p == 3) {
+        return 2;
+    }
     if (p < 5 || p % 3 == 0) {
         return 0;
     }

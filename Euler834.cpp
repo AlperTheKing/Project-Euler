@@ -4,6 +4,8 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <functional>
 
 using u64 = std::uint64_t;
 using u128 = unsigned __int128;

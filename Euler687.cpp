@@ -4,6 +4,8 @@
 #include <iomanip>
 #include <iostream>
 #include <unordered_map>
+#include <cmath>
+#include <functional>
 
 namespace {
 

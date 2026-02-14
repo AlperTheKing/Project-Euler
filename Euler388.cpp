@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <numeric>
@@ -112,7 +113,7 @@ std::vector<int> mu_sieve(const int limit) {
 class MertensPrefix {
    public:
     explicit MertensPrefix(const i64 n) {
-        const i64 estimated = static_cast<i64>(powl(static_cast<long double>(n), 2.0L / 3.0L));
+        const i64 estimated = static_cast<i64>(std::pow(static_cast<long double>(n), 2.0L / 3.0L));
         sieve_limit_ = static_cast<int>(std::max<i64>(1000000LL, estimated + 1000));
 
         const std::vector<int> mu = mu_sieve(sieve_limit_);

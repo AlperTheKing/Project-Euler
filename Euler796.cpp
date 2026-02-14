@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <iostream>
 #include <vector>
+#include <functional>
 
 using i64 = std::int64_t;
 

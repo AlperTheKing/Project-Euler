@@ -4,6 +4,8 @@
 #include <numeric>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <functional>
 
 using i64 = std::int64_t;
 using i128 = __int128_t;

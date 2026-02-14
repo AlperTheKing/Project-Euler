@@ -266,7 +266,7 @@ long double objective(long double a,
 }  // namespace
 
 int main() {
-    const std::size_t N = 20000;
+    const std::size_t N = 500000;
     std::vector<long double> cos_t(N), sin_t(N);
     for (std::size_t i = 0; i < N; ++i) {
         long double theta = 2.0L * kPi * static_cast<long double>(i) / static_cast<long double>(N);

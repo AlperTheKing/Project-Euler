@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 using u64 = std::uint64_t;
 using u128 = unsigned __int128;

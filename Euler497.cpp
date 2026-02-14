@@ -92,17 +92,20 @@ Matrix<T> base_matrix_for_orientation(const int from, const int to) {
     return m;
 }
 
-u64 hit_mod(const u64 k, const u64 x, const u64 y) {
-    if (x == y) {
-        return 0ULL;
-    }
-    if (x < y) {
-        const u64 a = (y + kMod - x) % kMod;
+u64 mod_sub(const u64 a, const u64 b) {
+    return (a >= b) ? (a - b) : (a + kMod - b);
+}
+
+u64 hit_mod(const u64 k, const u64 x, const u64 y, const bool ascending) {
+    if (x == y) return 0ULL;
+    if (ascending) {
+        const u64 a = mod_sub(y, x);
         const u64 b = (x + y + kMod - 2ULL) % kMod;
         return static_cast<u64>((static_cast<u128>(a) * b) % kMod);
     }
-    const u64 a = (x + kMod - y) % kMod;
-    const u64 b = (2ULL * k + kMod - x - y) % kMod;
+    const u64 a = mod_sub(x, y);
+    const u64 two_k = (2ULL * k) % kMod;
+    const u64 b = mod_sub(two_k, (x + y) % kMod);
     return static_cast<u64>((static_cast<u128>(a) * b) % kMod);
 }
 
@@ -173,14 +176,15 @@ std::vector<Matrix<T>> next_transition_counts(const std::vector<Matrix<T>>& prev
 
 u64 E_mod(const Matrix<u64>& c, const u64 k, const u64 a, const u64 b, const u64 cc) {
     std::array<u64, 3> pos{a, b, cc};
-    u64 out = hit_mod(k, b, a);  // initial walk to first source rod
+    u64 out = hit_mod(k, b, a, false);  // initial walk to first source rod
     for (int i = 0; i < 3; ++i) {
         for (int j = 0; j < 3; ++j) {
             if (c[i][j] == 0ULL) {
                 continue;
             }
+            const bool ascending = (i < j);
             const u64 h = hit_mod(k, pos[static_cast<std::size_t>(i)],
-                                  pos[static_cast<std::size_t>(j)]);
+                                  pos[static_cast<std::size_t>(j)], ascending);
             out = (out + static_cast<u64>((static_cast<u128>(c[i][j]) * h) % kMod)) % kMod;
         }
     }

@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <functional>
 
 namespace {
 
@@ -157,7 +158,7 @@ std::vector<Sequence> generate_sequences(u64 n_limit) {
     std::vector<Sequence> sequences;
     sequences.reserve(2048);
 
-    std::unordered_set<u128> seen;
+    std::unordered_set<u64> seen;
     seen.reserve(4096);
 
     for (int a = 1; a <= b_max; a += 2) {
@@ -182,8 +183,8 @@ std::vector<Sequence> generate_sequences(u64 n_limit) {
                 continue;
             }
 
-            const u128 key = (static_cast<u128>(s2) << 32) |
-                             static_cast<u128>(static_cast<std::uint32_t>(t));
+            const u64 key = (static_cast<u64>(s2) << 32) |
+                            static_cast<u64>(static_cast<std::uint32_t>(t));
             if (!seen.insert(key).second) {
                 continue;
             }

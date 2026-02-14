@@ -165,7 +165,7 @@ private:
         if (x <= static_cast<u64>(sieve_limit_) && static_cast<u64>(primes_[static_cast<std::size_t>(s - 1)]) >= x) {
             return 1ULL;
         }
-        const u64 key = (x << 6U) ^ static_cast<u64>(s);
+        const u64 key = (x << 16U) ^ static_cast<u64>(s);
         auto it = phi_cache_.find(key);
         if (it != phi_cache_.end()) {
             return it->second;

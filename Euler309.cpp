@@ -6,6 +6,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 namespace {
 

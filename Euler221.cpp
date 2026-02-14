@@ -3,6 +3,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 namespace {
 
@@ -53,7 +55,7 @@ bool parse_arguments(int argc, char** argv, Options& options) {
 }
 
 u64 nth_alexandrian(const int target) {
-    std::vector<u64> values;
+    std::vector<u128> values;
 
     int p_limit = 2000;
     while (true) {
@@ -69,8 +71,9 @@ u64 nth_alexandrian(const int target) {
                     continue;
                 }
                 const u64 e = n / static_cast<u64>(d);
-                const u128 v = static_cast<u128>(p) * static_cast<u128>(p + d) * static_cast<u128>(p + static_cast<int>(e));
-                values.push_back(static_cast<u64>(v));
+                const u128 pu = static_cast<u128>(static_cast<u64>(p));
+                const u128 v = pu * (pu + static_cast<u128>(static_cast<u64>(d))) * (pu + static_cast<u128>(e));
+                values.push_back(v);
             }
         }
 
@@ -78,10 +81,10 @@ u64 nth_alexandrian(const int target) {
         values.erase(std::unique(values.begin(), values.end()), values.end());
 
         if (static_cast<int>(values.size()) >= target) {
-            const u64 candidate = values[static_cast<std::size_t>(target - 1)];
+            const u128 candidate = values[static_cast<std::size_t>(target - 1)];
             const u128 lb = static_cast<u128>(p_limit + 1) * static_cast<u128>(p_limit + 2) * static_cast<u128>(p_limit + 2);
             if (lb > candidate) {
-                return candidate;
+                return static_cast<u64>(candidate);
             }
         }
 

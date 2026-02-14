@@ -1,6 +1,8 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <algorithm>
+#include <functional>
 
 namespace {
 

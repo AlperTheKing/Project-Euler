@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <iostream>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 using u64 = std::uint64_t;
 

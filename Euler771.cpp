@@ -2,6 +2,8 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 using namespace std;
 

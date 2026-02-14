@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <functional>
 
 using namespace std;
 
@@ -103,7 +105,7 @@ u64 max_k_for_pair(u128 n, int i_idx, int j_idx) {
 vector<u64> generate_non_fundamentals(u64 k_max) {
     vector<u64> nf;
     if (k_max < 4) return nf;
-    u64 k1_max = static_cast<u64>(sqrtl(static_cast<long double>(k_max) / 4.0L)) + 2;
+    u64 k1_max = static_cast<u64>(std::sqrt(static_cast<long double>(k_max) / 4.0L)) + 2;
     for (u64 k1 = 1; k1 <= k1_max; ++k1) {
         u128 x1 = 2 * static_cast<u128>(k1) + 1;
         u128 x_prev = 1;

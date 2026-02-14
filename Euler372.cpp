@@ -137,7 +137,8 @@ u128 sum_ceil_sqrt(BeattySumSqrt& beatty, const int d, const u64 l, const u64 r)
 
 u128 count_rays(const u64 m, const u64 n) {
     const u64 l = m + 1U;
-    const u64 k_max = (n / l) * (n / l);
+    const u64 k_max = static_cast<u64>((static_cast<u128>(n) * static_cast<u128>(n)) /
+                                       (static_cast<u128>(l) * static_cast<u128>(l)));
 
     BeattySumSqrt beatty;
     u128 total = 0U;

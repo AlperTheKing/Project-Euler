@@ -3,6 +3,8 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 namespace {
 

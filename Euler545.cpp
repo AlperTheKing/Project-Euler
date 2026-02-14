@@ -4,6 +4,8 @@
 #include <iostream>
 #include <numeric>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 namespace {
 

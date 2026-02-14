@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <functional>
 
 using namespace std;
 
@@ -33,7 +35,7 @@ bool pow_leq(uint64_t base, int exp, uint64_t limit) {
 
 uint64_t int_nth_root(uint64_t n, int k) {
     if (k == 1 || n <= 1) return n;
-    long double approx = powl(static_cast<long double>(n), 1.0L / k);
+    long double approx = std::pow(static_cast<long double>(n), 1.0L / k);
     uint64_t r = static_cast<uint64_t>(approx);
     if (r < 1) r = 1;
     while (pow_leq(r + 1, k, n)) ++r;

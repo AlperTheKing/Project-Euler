@@ -3,8 +3,10 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
+#include <functional>
 
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;

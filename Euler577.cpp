@@ -1,6 +1,8 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <algorithm>
+#include <functional>
 
 // Project Euler 577: Counting Hexagons
 //

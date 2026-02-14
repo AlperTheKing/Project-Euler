@@ -1,6 +1,8 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <cmath>
+#include <functional>
 
 namespace {
 

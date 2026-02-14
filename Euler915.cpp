@@ -5,6 +5,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <cmath>
+#include <functional>
 
 namespace {
 

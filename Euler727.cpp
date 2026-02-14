@@ -1,8 +1,11 @@
 #include <cassert>
+#include <cstdint>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
+#include <algorithm>
+#include <functional>
 
 namespace {
 

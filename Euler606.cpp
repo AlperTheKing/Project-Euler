@@ -5,6 +5,7 @@
 #include <iostream>
 #include <numeric>
 #include <vector>
+#include <cmath>
 
 // Project Euler 606: only numbers of the form (p*q)^3 (p<q primes) have 252 gozinta chains,
 // so S(N) reduces to sum_{p<q, pq <= cbrt(N)} (pq)^3. For cbrt(10^36)=10^12 we compute this

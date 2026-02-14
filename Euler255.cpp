@@ -1,110 +1,63 @@
-#include <iostream>
-#include <pthread.h>
-#include <chrono>
+#include <cassert>
+#include <cstdint>
 #include <iomanip>
-#include <cmath>
-#include <vector>
-#include <thread>  // For getting the number of hardware threads
+#include <iostream>
 
-// Function to calculate the number of digits in an unsigned long long number
-int numberOfDigits(unsigned long long n) {
-    return n == 0 ? 1 : static_cast<int>(log10(n)) + 1;
+using u64 = std::uint64_t;
+using i64 = std::int64_t;
+using u128 = unsigned __int128;
+
+static inline u64 ceil_div(u64 a, u64 b) {
+    return (a + b - 1) / b;
 }
 
-// Function to compute the rounded square root using Heron's method (adapted for integers)
-int roundedSquareRoot(unsigned long long n) {
-    int digits = numberOfDigits(n);
-    unsigned long long x_k;
+static u128 total_iterations(u64 lo, u64 hi, u64 x) {
+    if (lo > hi) return 0;
 
-    // Initial guess based on the number of digits
-    if (digits % 2 == 1) {
-        x_k = 2 * pow(10, (digits - 1) / 2);
-    } else {
-        x_k = 7 * pow(10, (digits - 2) / 2);
+    u128 total = static_cast<u128>(hi - lo + 1);  // Current step always counts.
+
+    const u64 cmin = ceil_div(lo, x);
+    const u64 cmax = ceil_div(hi, x);
+    const u64 ymin = (x + cmin) / 2;
+    const u64 ymax = (x + cmax) / 2;
+
+    for (u64 y = ymin; y <= ymax; ++y) {
+        i64 cl = static_cast<i64>(2 * y) - static_cast<i64>(x);
+        i64 ch = cl + 1;
+        i64 from = std::max<i64>(cl, static_cast<i64>(cmin));
+        i64 to = std::min<i64>(ch, static_cast<i64>(cmax));
+        if (from > to) continue;
+
+        u64 nl = static_cast<u64>(from - 1) * x + 1;
+        u64 nr = static_cast<u64>(to) * x;
+        if (nl < lo) nl = lo;
+        if (nr > hi) nr = hi;
+
+        if (y == x) continue;
+        total += total_iterations(nl, nr, y);
     }
-
-    unsigned long long x_k1 = 0;
-    int iterations = 0;
-
-    while (true) {
-        x_k1 = (x_k + (n + x_k - 1) / x_k) / 2;  // The integer division equivalent of the formula
-
-        iterations++;
-        if (x_k == x_k1) break;  // If x_k == x_k1, stop the iteration
-        x_k = x_k1;
-    }
-
-    return iterations;
+    return total;
 }
 
-// Thread arguments struct
-struct ThreadArgs {
-    unsigned long long startRange;
-    unsigned long long endRange;
-    unsigned long long totalIterations;
-};
+static long double average_iterations_for_digits(int d) {
+    u64 lo = 1;
+    for (int i = 1; i < d; ++i) lo *= 10;
+    u64 hi = lo * 10 - 1;
 
-// Function that each thread will execute
-void* threadFunction(void* arg) {
-    ThreadArgs* args = (ThreadArgs*)arg;
-    unsigned long long totalIterations = 0;
-
-    // Loop over the assigned range and calculate the iterations
-    for (unsigned long long n = args->startRange; n < args->endRange; ++n) {
-        int iterations = roundedSquareRoot(n);
-        totalIterations += iterations;
-    }
-
-    args->totalIterations = totalIterations;
-    return nullptr;
+    u64 p10 = 1;
+    int exp = (d % 2 == 1) ? ((d - 1) / 2) : ((d - 2) / 2);
+    for (int i = 0; i < exp; ++i) p10 *= 10;
+    u64 x0 = (d % 2 == 1) ? (2 * p10) : (7 * p10);
+    u128 tot = total_iterations(lo, hi, x0);
+    u64 cnt = hi - lo + 1;
+    return static_cast<long double>(tot) / static_cast<long double>(cnt);
 }
 
 int main() {
-    const unsigned long long startRange = 10000000000000ULL;  // Start of the range 10^13
-    const unsigned long long endRange = 100000000000000ULL;   // End of the range 10^14 (exclusive)
-    unsigned long long numberOfNumbers = endRange - startRange;  // Total numbers in the range
+    long double check = average_iterations_for_digits(5);
+    assert(check > 3.2102888888L && check < 3.2102888890L);
 
-    // Get the number of hardware threads (cores)
-    unsigned int numThreads = std::thread::hardware_concurrency();
-    if (numThreads == 0) {
-        numThreads = 4;  // Fallback to 4 threads if hardware_concurrency fails
-    }
-
-    // Create an array to hold thread arguments
-    std::vector<ThreadArgs> threadArgs(numThreads);
-    std::vector<pthread_t> threads(numThreads);
-
-    unsigned long long numbersPerThread = numberOfNumbers / numThreads;
-
-    // Start measuring time
-    auto start = std::chrono::high_resolution_clock::now();
-
-    // Create and launch threads
-    for (unsigned int i = 0; i < numThreads; ++i) {
-        threadArgs[i].startRange = startRange + i * numbersPerThread;
-        threadArgs[i].endRange = (i == numThreads - 1) ? endRange : threadArgs[i].startRange + numbersPerThread;
-        threadArgs[i].totalIterations = 0;
-        pthread_create(&threads[i], nullptr, threadFunction, &threadArgs[i]);
-    }
-
-    // Wait for all threads to finish
-    unsigned long long totalIterations = 0;
-    for (unsigned int i = 0; i < numThreads; ++i) {
-        pthread_join(threads[i], nullptr);
-        totalIterations += threadArgs[i].totalIterations;
-    }
-
-    // Stop measuring time
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-
-    // Calculate the average number of iterations
-    double averageIterations = static_cast<double>(totalIterations) / numberOfNumbers;
-
-    // Output the results
-    std::cout << "Average number of iterations for the range [10^13, 10^14): " 
-              << std::fixed << std::setprecision(10) << averageIterations << std::endl;
-    std::cout << "Elapsed time: " << elapsed.count() << " seconds" << std::endl;
-
+    long double ans = average_iterations_for_digits(14);
+    std::cout << std::fixed << std::setprecision(10) << static_cast<double>(ans) << '\n';
     return 0;
 }

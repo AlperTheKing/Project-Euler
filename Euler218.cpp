@@ -2,6 +2,8 @@
 #include <iostream>
 #include <numeric>
 #include <string>
+#include <cmath>
+#include <functional>
 
 namespace {
 

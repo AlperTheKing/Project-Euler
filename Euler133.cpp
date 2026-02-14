@@ -49,7 +49,7 @@ bool parse_arguments(int argc, char** argv, Options& options) {
         return false;
     }
 
-    return options.limit >= 3;
+    return options.limit >= 2;
 }
 
 u64 mul_mod(u64 a, u64 b, u64 mod) {
@@ -123,25 +123,28 @@ std::vector<int> primes_below(const int limit) {
     return primes;
 }
 
+bool can_divide_some_R10n(const int p) {
+    if (p == 2 || p == 3 || p == 5) {
+        return false;
+    }
+
+    int ord = multiplicative_order_10(p);
+    while ((ord % 2) == 0) {
+        ord /= 2;
+    }
+    while ((ord % 5) == 0) {
+        ord /= 5;
+    }
+
+    return ord == 1;
+}
+
 std::int64_t solve(const int limit) {
     const std::vector<int> primes = primes_below(limit);
 
     std::int64_t sum = 0;
     for (int p : primes) {
-        if (p == 2 || p == 5) {
-            sum += p;
-            continue;
-        }
-
-        int ord = multiplicative_order_10(p);
-        while ((ord % 2) == 0) {
-            ord /= 2;
-        }
-        while ((ord % 5) == 0) {
-            ord /= 5;
-        }
-
-        if (ord != 1) {
+        if (!can_divide_some_R10n(p)) {
             sum += p;
         }
     }
@@ -150,8 +153,12 @@ std::int64_t solve(const int limit) {
 }
 
 bool run_checkpoints() {
-    if (solve(100) != 915) {
+    if (solve(100) != 918) {
         std::cerr << "Checkpoint failed for limit=100" << '\n';
+        return false;
+    }
+    if (!can_divide_some_R10n(17) || can_divide_some_R10n(19) || can_divide_some_R10n(3)) {
+        std::cerr << "Checkpoint failed for prime behavior (3, 17, 19)" << '\n';
         return false;
     }
     return true;

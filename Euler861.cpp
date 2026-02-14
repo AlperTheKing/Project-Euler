@@ -4,182 +4,247 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
-#include <unordered_map>
+#include <limits>
 #include <vector>
 
-using u64 = std::uint64_t;
 using i64 = std::int64_t;
-
-static u64 pow_limited(u64 base, int exp, u64 limit) {
-    u64 res = 1;
-    for (int i = 0; i < exp; ++i) {
-        if (res > limit / base) return limit + 1;
-        res *= base;
-    }
-    return res;
-}
-
-static u64 iroot(u64 n, int k) {
-    if (k == 1 || n <= 1) return n;
-    long double x = std::powl(static_cast<long double>(n), 1.0L / static_cast<long double>(k));
-    u64 r = static_cast<u64>(x);
-    while (pow_limited(r + 1, k, n) <= n) ++r;
-    while (pow_limited(r, k, n) > n) --r;
-    return r;
-}
-
-class PrimePi {
-public:
-    PrimePi(int limit = 1'000'000) : limit_(limit), pi_small_(limit + 1, 0) {
-        std::vector<bool> is_prime(limit_ + 1, true);
-        is_prime[0] = is_prime[1] = false;
-        for (int p = 2; p * p <= limit_; ++p) {
-            if (!is_prime[p]) continue;
-            for (int q = p * p; q <= limit_; q += p) is_prime[q] = false;
-        }
-        for (int i = 2; i <= limit_; ++i) {
-            if (is_prime[i]) primes_.push_back(i);
-            pi_small_[i] = pi_small_[i - 1] + (is_prime[i] ? 1 : 0);
-        }
-    }
-
-    const std::vector<int>& primes() const { return primes_; }
-
-    u64 pi(u64 x) {
-        if (x <= static_cast<u64>(limit_)) return static_cast<u64>(pi_small_[static_cast<std::size_t>(x)]);
-        auto it = pi_cache_.find(x);
-        if (it != pi_cache_.end()) return it->second;
-
-        u64 a = pi(iroot(x, 4));
-        u64 b = pi(iroot(x, 2));
-        u64 c = pi(iroot(x, 3));
-
-        u64 sum = phi(x, static_cast<int>(a)) + (b + a - 2) * (b - a + 1) / 2;
-
-        for (u64 i = a + 1; i <= b; ++i) {
-            u64 w = x / static_cast<u64>(primes_[static_cast<std::size_t>(i - 1)]);
-            sum -= pi(w);
-            if (i <= c) {
-                u64 lim = pi(iroot(w, 2));
-                for (u64 j = i; j <= lim; ++j) {
-                    u64 pw = static_cast<u64>(primes_[static_cast<std::size_t>(j - 1)]);
-                    sum -= pi(w / pw) - (j - 1);
-                }
-            }
-        }
-
-        pi_cache_[x] = sum;
-        return sum;
-    }
-
-private:
-    int limit_;
-    std::vector<int> primes_;
-    std::vector<int> pi_small_;
-    std::unordered_map<u64, u64> phi_cache_;
-    std::unordered_map<u64, u64> pi_cache_;
-
-    static u64 phi_key(u64 x, int s) {
-        return (x << 9) ^ static_cast<u64>(s);
-    }
-
-    u64 phi(u64 x, int s) {
-        if (s == 0) return x;
-        if (s == 1) return x - x / 2;
-
-        u64 key = phi_key(x, s);
-        auto it = phi_cache_.find(key);
-        if (it != phi_cache_.end()) return it->second;
-
-        u64 res = phi(x, s - 1) - phi(x / static_cast<u64>(primes_[static_cast<std::size_t>(s - 1)]), s - 1);
-        phi_cache_[key] = res;
-        return res;
-    }
-};
+using u64 = std::uint64_t;
 
 class Solver {
 public:
-    explicit Solver(u64 N) : N_(N), prime_pi_(1'000'000), primes_(prime_pi_.primes()) {}
+    explicit Solver(u64 n) : N_(n) {
+        rN_ = static_cast<int>(std::sqrt(static_cast<long double>(N_)));
+        while (static_cast<u64>(rN_ + 1) * static_cast<u64>(rN_ + 1) <= N_) {
+            ++rN_;
+        }
+        while (static_cast<u64>(rN_) * static_cast<u64>(rN_) > N_) {
+            --rN_;
+        }
+        primes_.push_back(2);
+        get_primes(2 * rN_);
+        pc_ = lucy();
+    }
 
-    u64 Q(int k) {
-        int D = 2 * k;
-        auto seqs = exponent_sequences(D);
-        u64 total = 0;
-        for (const auto& seq : seqs) total += count_sequence(seq);
-        return total;
+    u64 Q(int k) const {
+        if (k < 2) {
+            return 0;
+        }
+        return cumulative(k) - cumulative(k - 1);
+    }
+
+    u64 cumulative(int k) const {
+        if (k < 2) {
+            return 0;
+        }
+        if (k < static_cast<int>(cumulative_cache_.size()) &&
+            cumulative_cache_[static_cast<std::size_t>(k)] != std::numeric_limits<u64>::max()) {
+            return cumulative_cache_[static_cast<std::size_t>(k)];
+        }
+
+        const int two_k = 2 * k;
+        u64 ans = 0;
+        std::vector<int> cp;
+
+        auto power_of_two_index = [](u64 x) -> int {
+            if (x == 1) return 0;
+            if (x == 2) return 1;
+            if (x == 4) return 2;
+            if (x == 8) return 3;
+            if (x == 16) return 4;
+            return -1;
+        };
+
+        dfs(0, N_, 1, 1, cp, two_k, [&](u64 pw, u64 cb, const std::vector<int>& cur_cp) {
+            for (int k0 = 2; k0 <= k; ++k0) {
+                const u64 two_k0 = static_cast<u64>(2 * k0);
+                if (two_k0 % cb != 0) {
+                    continue;
+                }
+                const int k2 = power_of_two_index(two_k0 / cb);
+                if (k2 < 0) {
+                    continue;
+                }
+                if (k2 == 0) {
+                    ans += 1;
+                } else {
+                    ans += rec(cur_cp, 0, N_ / pw, pw, k2);
+                }
+            }
+        });
+
+        if (k < static_cast<int>(cumulative_cache_.size())) {
+            cumulative_cache_[static_cast<std::size_t>(k)] = ans;
+        }
+        return ans;
     }
 
 private:
     u64 N_;
-    PrimePi prime_pi_;
-    const std::vector<int>& primes_;
+    int rN_;
+    std::vector<int> primes_;
+    std::vector<i64> pc_;
+    mutable std::vector<u64> cumulative_cache_{32, std::numeric_limits<u64>::max()};
 
-    static int c_value(int a) {
-        return (a & 1) ? (a + 1) : a;
+    static bool contains_prime(const std::vector<int>& cp, int p) {
+        for (int q : cp) {
+            if (q == p) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    std::vector<std::vector<int>> exponent_sequences(int D) {
-        static const int cvals[10] = {2, 4, 6, 8, 10, 12, 14, 16, 18, 20};
-        std::vector<std::vector<int>> out;
-        std::vector<int> cur;
-
-        std::function<void(int)> dfs = [&](int rem) {
-            if (rem == 1) {
-                if (!cur.empty()) out.push_back(cur);
-                return;
-            }
-            for (int c : cvals) {
-                if (rem % c != 0) continue;
-                cur.push_back(c - 1);
-                dfs(rem / c);
-                cur.pop_back();
-                cur.push_back(c);
-                dfs(rem / c);
-                cur.pop_back();
-            }
-        };
-
-        dfs(D);
-        return out;
+    i64 pc_at(int idx) const {
+        if (idx >= 0) {
+            return pc_[static_cast<std::size_t>(idx)];
+        }
+        return pc_[pc_.size() - static_cast<std::size_t>(-idx)];
     }
 
-    u64 count_sequence(const std::vector<int>& exps) {
-        const int r = static_cast<int>(exps.size());
-        std::vector<int> suffix(r + 1, 0);
-        for (int i = r - 1; i >= 0; --i) suffix[i] = suffix[i + 1] + exps[i];
+    void get_primes(int limit) {
+        std::vector<int> sieve(limit + 1, 0);
+        for (int i = 2; i <= limit; i += 2) {
+            sieve[static_cast<std::size_t>(i)] = 2;
+        }
 
-        std::unordered_map<u64, u64> memo;
-        memo.reserve(1 << 14);
-
-        std::function<u64(int, int, u64)> dfs = [&](int pos, int start_idx, u64 limit) -> u64 {
-            if (pos == r) return 1;
-            u64 key = (static_cast<u64>(pos) << 61) ^ (static_cast<u64>(start_idx) << 44) ^ limit;
-            auto it = memo.find(key);
-            if (it != memo.end()) return it->second;
-
-            u64 ans = 0;
-            if (pos == r - 1) {
-                u64 mx = iroot(limit, exps[pos]);
-                u64 cnt = prime_pi_.pi(mx);
-                ans = (cnt > static_cast<u64>(start_idx)) ? (cnt - static_cast<u64>(start_idx)) : 0;
-            } else {
-                u64 mx = iroot(limit, suffix[pos]);
-                auto it_hi = std::upper_bound(primes_.begin() + start_idx, primes_.end(), static_cast<int>(mx));
-                int hi = static_cast<int>(it_hi - primes_.begin());
-
-                for (int i = start_idx; i < hi; ++i) {
-                    u64 p = static_cast<u64>(primes_[static_cast<std::size_t>(i)]);
-                    u64 pw = pow_limited(p, exps[pos], limit);
-                    if (pw > limit) break;
-                    ans += dfs(pos + 1, i + 1, limit / pw);
+        for (int i = 3; i <= limit; i += 2) {
+            if (sieve[static_cast<std::size_t>(i)] == 0) {
+                primes_.push_back(i);
+                sieve[static_cast<std::size_t>(i)] = i;
+                if (static_cast<i64>(i) * static_cast<i64>(i) <= limit) {
+                    for (int j = i * i; j <= limit; j += 2 * i) {
+                        if (sieve[static_cast<std::size_t>(j)] == 0) {
+                            sieve[static_cast<std::size_t>(j)] = i;
+                        }
+                    }
                 }
             }
+        }
+    }
 
-            memo[key] = ans;
-            return ans;
+    std::vector<i64> lucy() const {
+        const int r = rN_;
+        std::vector<i64> S;
+        S.reserve(static_cast<std::size_t>(2 * r + 1));
+        for (int i = 0; i <= r; ++i) {
+            S.push_back(static_cast<i64>(i - 1));
+        }
+        for (int i = r; i >= 1; --i) {
+            S.push_back(static_cast<i64>(N_ / static_cast<u64>(i) - 1));
+        }
+
+        auto at = [&](int idx) -> i64& {
+            if (idx >= 0) {
+                return S[static_cast<std::size_t>(idx)];
+            }
+            return S[S.size() - static_cast<std::size_t>(-idx)];
         };
 
-        return dfs(0, 0, N_);
+        for (int p = 2; p <= r; ++p) {
+            if (S[static_cast<std::size_t>(p)] <= S[static_cast<std::size_t>(p - 1)]) {
+                continue;
+            }
+
+            const i64 sp = S[static_cast<std::size_t>(p - 1)];
+            const u64 p2 = static_cast<u64>(p) * static_cast<u64>(p);
+
+            for (int i = 1; i <= r; ++i) {
+                if (N_ / static_cast<u64>(i) < p2) {
+                    break;
+                }
+                const u64 ip = static_cast<u64>(i) * static_cast<u64>(p);
+                const u64 nip = N_ / ip;
+                const int idx = (nip <= static_cast<u64>(r)) ? static_cast<int>(nip) : -static_cast<int>(ip);
+                at(-i) -= (at(idx) - sp);
+            }
+
+            for (int i = r; i >= 1; --i) {
+                if (static_cast<u64>(i) < p2) {
+                    break;
+                }
+                S[static_cast<std::size_t>(i)] -= (S[static_cast<std::size_t>(i / p)] - sp);
+            }
+        }
+
+        return S;
+    }
+
+    u64 rec(const std::vector<int>& cp, int i, u64 n, u64 cn, int k) const {
+        if (k == 1) {
+            const int idx = (cn < static_cast<u64>(rN_)) ? -static_cast<int>(cn) : static_cast<int>(N_ / cn);
+            i64 ans = pc_at(idx) - i;
+            if (ans < 0) {
+                ans = 0;
+            }
+            const int start_prime =
+                (i < static_cast<int>(primes_.size())) ? primes_[static_cast<std::size_t>(i)] : std::numeric_limits<int>::max();
+            for (int p : cp) {
+                if (static_cast<u64>(p) <= n && p >= start_prime) {
+                    --ans;
+                }
+            }
+            return (ans > 0) ? static_cast<u64>(ans) : 0;
+        }
+
+        u64 ans = 0;
+        while (true) {
+            if (i >= static_cast<int>(primes_.size())) {
+                break;
+            }
+            const int p = primes_[static_cast<std::size_t>(i)];
+            if (contains_prime(cp, p)) {
+                ++i;
+                continue;
+            }
+            const u64 nn = n / static_cast<u64>(p);
+            if (nn < static_cast<u64>(p)) {
+                break;
+            }
+            ans += rec(cp, i + 1, nn, cn * static_cast<u64>(p), k - 1);
+            ++i;
+        }
+        return ans;
+    }
+
+    template <class F>
+    void dfs(int i, u64 n, u64 c, u64 cb, std::vector<int>& cp, int two_k, F&& emit) const {
+        emit(c, cb, cp);
+
+        while (i < static_cast<int>(primes_.size())) {
+            const u64 p = static_cast<u64>(primes_[static_cast<std::size_t>(i)]);
+            if (p > std::numeric_limits<u64>::max() / p) {
+                break;
+            }
+
+            u64 nn = n / (p * p);
+            if (nn == 0) {
+                break;
+            }
+
+            u64 cc = c * p * p;
+            int e = 2;
+            cp.push_back(static_cast<int>(p));
+
+            while (true) {
+                const u64 mult = static_cast<u64>(e + (e & 1));
+                if (cb <= static_cast<u64>(two_k) / mult) {
+                    dfs(i + 1, nn, cc, cb * mult, cp, two_k, emit);
+                }
+
+                if (nn < p) {
+                    break;
+                }
+                nn /= p;
+                if (cc > std::numeric_limits<u64>::max() / p) {
+                    break;
+                }
+                cc *= p;
+                ++e;
+            }
+
+            cp.pop_back();
+            ++i;
+        }
     }
 };
 
@@ -195,7 +260,9 @@ int main() {
 
     Solver s(1'000'000'000'000ULL);
     u64 ans = 0;
-    for (int k = 2; k <= 10; ++k) ans += s.Q(k);
+    for (int k = 2; k <= 10; ++k) {
+        ans += s.Q(k);
+    }
     std::cout << ans << '\n';
     return 0;
 }

@@ -1,22 +1,18 @@
-#include <array>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 using std::cerr;
 using std::cout;
 using std::int64_t;
-using std::size_t;
 using std::string;
 using std::uint64_t;
 using std::vector;
@@ -24,13 +20,6 @@ using std::vector;
 struct Point {
     int x;
     int y;
-};
-
-struct DispInfo {
-    uint8_t count;
-    bool tangent;
-    Point p1;
-    Point p2;
 };
 
 static inline int64_t pair_key(int x, int y) {
@@ -63,34 +52,6 @@ static vector<Point> circle_points(int m) {
     return pts;
 }
 
-static vector<Point> non_opposite_representatives(const vector<Point>& points) {
-    vector<Point> sorted = points;
-    std::sort(sorted.begin(), sorted.end(), [](const Point& a, const Point& b) {
-        return (a.x < b.x) || (a.x == b.x && a.y < b.y);
-    });
-
-    std::unordered_set<int64_t> used;
-    used.reserve(points.size() * 2 + 16);
-
-    vector<Point> reps;
-    reps.reserve(points.size() / 2 + 2);
-
-    for (const Point& v : sorted) {
-        const int64_t k = pair_key(v.x, v.y);
-        if (used.find(k) != used.end()) {
-            continue;
-        }
-        const Point ov{-v.x, -v.y};
-        used.insert(k);
-        used.insert(pair_key(ov.x, ov.y));
-
-        const bool lex_greater = (v.x > ov.x) || (v.x == ov.x && v.y > ov.y);
-        reps.push_back(lex_greater ? v : ov);
-    }
-
-    return reps;
-}
-
 static vector<std::array<Point, 2>> opposite_pairs(const vector<Point>& points) {
     vector<Point> sorted = points;
     std::sort(sorted.begin(), sorted.end(), [](const Point& a, const Point& b) {
@@ -117,146 +78,162 @@ static vector<std::array<Point, 2>> opposite_pairs(const vector<Point>& points) 
     return pairs;
 }
 
-static std::unordered_map<int64_t, DispInfo> precompute_displacements(int m, const vector<Point>& points) {
-    std::unordered_set<int64_t> point_set;
-    point_set.reserve(points.size() * 2 + 16);
-
-    int max_abs = 0;
-    for (const Point& p : points) {
-        point_set.insert(pair_key(p.x, p.y));
-        max_abs = std::max(max_abs, std::max(std::abs(p.x), std::abs(p.y)));
+static int opposite_pair_count_by_factorization(uint64_t m) {
+    if (m == 0) {
+        return 0;
     }
 
-    std::unordered_map<int64_t, DispInfo> info;
-    info.reserve((4 * max_abs + 1) * (4 * max_abs + 1));
+    uint64_t n = m;
+    int pairs = 2;
 
-    for (int dx = -2 * max_abs; dx <= 2 * max_abs; ++dx) {
-        for (int dy = -2 * max_abs; dy <= 2 * max_abs; ++dy) {
-            if (dx == 0 && dy == 0) {
-                continue;
+    int e2 = 0;
+    while ((n & 1ULL) == 0ULL) {
+        n >>= 1;
+        ++e2;
+    }
+    (void)e2;
+
+    for (uint64_t p = 3; p * p <= n; p += 2) {
+        if (n % p != 0) {
+            continue;
+        }
+        int exp = 0;
+        while (n % p == 0) {
+            n /= p;
+            ++exp;
+        }
+        if ((p & 3ULL) == 3ULL) {
+            if ((exp & 1) != 0) {
+                return 0;
             }
-
-            const int64_t d2 = 1LL * dx * dx + 1LL * dy * dy;
-            const bool tangent = (d2 == 4LL * m);
-            if (d2 > 4LL * m && !tangent) {
-                continue;
+        } else if ((p & 3ULL) == 1ULL) {
+            if (pairs > std::numeric_limits<int>::max() / (exp + 1)) {
+                return std::numeric_limits<int>::max();
             }
-
-            int count = 0;
-            Point p1{0, 0};
-            Point p2{0, 0};
-
-            for (const Point& p : points) {
-                if (point_set.find(pair_key(p.x - dx, p.y - dy)) != point_set.end()) {
-                    ++count;
-                    if (count == 1) {
-                        p1 = p;
-                    } else if (count == 2) {
-                        p2 = p;
-                    }
-                }
-            }
-
-            info.emplace(pair_key(dx, dy), DispInfo{static_cast<uint8_t>(count), tangent, p1, p2});
+            pairs *= (exp + 1);
         }
     }
 
-    return info;
+    if (n > 1) {
+        if ((n & 3ULL) == 3ULL) {
+            return 0;
+        }
+        if ((n & 3ULL) == 1ULL) {
+            if (pairs > std::numeric_limits<int>::max() / 2) {
+                return std::numeric_limits<int>::max();
+            }
+            pairs *= 2;
+        }
+    }
+
+    return pairs;
+}
+
+static std::unordered_set<int64_t> build_bad_displacements(const vector<Point>& points) {
+    std::unordered_set<int64_t> bad;
+    bad.reserve(points.size() * points.size() * 2 + 16);
+    for (const Point& a : points) {
+        for (const Point& b : points) {
+            if (a.x == b.x && a.y == b.y) {
+                continue;
+            }
+            bad.insert(pair_key(a.x - b.x, a.y - b.y));
+        }
+    }
+    return bad;
+}
+
+static bool four_tuple_has_forbidden_sum(
+    const vector<Point>& selected,
+    int used_count,
+    const std::unordered_set<int64_t>& bad_disp
+) {
+    if (used_count < 4) {
+        return false;
+    }
+
+    const Point& d = selected[used_count - 1];
+    for (int i = 0; i < used_count - 1; ++i) {
+        const Point& a = selected[i];
+        for (int j = i + 1; j < used_count - 1; ++j) {
+            const Point& b = selected[j];
+            for (int k = j + 1; k < used_count - 1; ++k) {
+                const Point& c = selected[k];
+                for (int mask = 0; mask < 16; ++mask) {
+                    const int sx =
+                        ((mask & 1) ? -a.x : a.x) +
+                        ((mask & 2) ? -b.x : b.x) +
+                        ((mask & 4) ? -c.x : c.x) +
+                        ((mask & 8) ? -d.x : d.x);
+                    const int sy =
+                        ((mask & 1) ? -a.y : a.y) +
+                        ((mask & 2) ? -b.y : b.y) +
+                        ((mask & 4) ? -c.y : c.y) +
+                        ((mask & 8) ? -d.y : d.y);
+                    if (sx == 0 && sy == 0) {
+                        continue;
+                    }
+                    if (bad_disp.find(pair_key(sx, sy)) != bad_disp.end()) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
 }
 
 static bool test_selected_vectors(
     const vector<Point>& v,
-    const std::unordered_map<int64_t, DispInfo>& disp_info,
-    const vector<int>& even_masks
+    const std::unordered_set<int64_t>& bad_disp
 ) {
     const int d = static_cast<int>(v.size());
     const int full = 1 << d;
-    const int circles = 1 << (d - 1);
 
     vector<Point> sums(full, Point{0, 0});
     for (int mask = 1; mask < full; ++mask) {
-        const int b = __builtin_ctz(static_cast<unsigned>(mask));
-        const int pm = mask ^ (1 << b);
-        sums[mask] = {sums[pm].x + v[b].x, sums[pm].y + v[b].y};
+        const int bit = __builtin_ctz(static_cast<unsigned>(mask));
+        const int pm = mask ^ (1 << bit);
+        sums[mask] = {sums[pm].x + v[bit].x, sums[pm].y + v[bit].y};
     }
 
-    vector<Point> centers(circles);
-    centers.reserve(circles);
+    std::unordered_set<int64_t> even_keys;
+    std::unordered_set<int64_t> odd_keys;
+    even_keys.reserve(full + 16);
+    odd_keys.reserve(full + 16);
 
-    std::unordered_set<int64_t> center_keys;
-    center_keys.reserve(circles * 2 + 16);
-
-    for (int i = 0; i < circles; ++i) {
-        centers[i] = sums[even_masks[i]];
-        const int64_t key = pair_key(centers[i].x, centers[i].y);
-        if (center_keys.find(key) != center_keys.end()) {
-            return false;
+    for (int mask = 0; mask < full; ++mask) {
+        const int64_t key = pair_key(sums[mask].x, sums[mask].y);
+        if ((__builtin_popcount(static_cast<unsigned>(mask)) & 1) == 0) {
+            if (!even_keys.insert(key).second) {
+                return false;
+            }
+        } else {
+            if (!odd_keys.insert(key).second) {
+                return false;
+            }
         }
-        center_keys.insert(key);
     }
 
-    vector<vector<int>> adj(circles);
-    std::unordered_set<int64_t> harmony_keys;
-    harmony_keys.reserve(circles * 4 + 16);
-
-    for (int i = 0; i < circles; ++i) {
-        const Point& ci = centers[i];
-        for (int j = i + 1; j < circles; ++j) {
-            const Point& cj = centers[j];
-            const int dx = cj.x - ci.x;
-            const int dy = cj.y - ci.y;
-
-            const auto it = disp_info.find(pair_key(dx, dy));
-            if (it == disp_info.end()) {
+    for (int i = 0; i < full; ++i) {
+        for (int j = i + 1; j < full; ++j) {
+            const unsigned diff = static_cast<unsigned>(i ^ j);
+            if ((__builtin_popcount(diff) & 1U) != 0U) {
                 continue;
             }
-
-            const DispInfo& in = it->second;
-            if (in.tangent) {
-                return false;
+            if (__builtin_popcount(diff) <= 2) {
+                continue;
             }
-
-            if (in.count == 2) {
-                harmony_keys.insert(pair_key(ci.x + in.p1.x, ci.y + in.p1.y));
-                harmony_keys.insert(pair_key(ci.x + in.p2.x, ci.y + in.p2.y));
-
-                if (static_cast<int>(harmony_keys.size()) > circles) {
-                    return false;
-                }
-
-                adj[i].push_back(j);
-                adj[j].push_back(i);
-            } else if (in.count != 0) {
+            const int dx = sums[i].x - sums[j].x;
+            const int dy = sums[i].y - sums[j].y;
+            if (bad_disp.find(pair_key(dx, dy)) != bad_disp.end()) {
                 return false;
             }
         }
     }
 
-    if (static_cast<int>(harmony_keys.size()) != circles) {
-        return false;
-    }
-
-    vector<char> visited(circles, 0);
-    vector<int> stack;
-    stack.reserve(circles);
-    stack.push_back(0);
-    visited[0] = 1;
-
-    int seen = 0;
-    while (!stack.empty()) {
-        const int u = stack.back();
-        stack.pop_back();
-        ++seen;
-
-        for (const int vtx : adj[u]) {
-            if (!visited[vtx]) {
-                visited[vtx] = 1;
-                stack.push_back(vtx);
-            }
-        }
-    }
-
-    return seen == circles;
+    return true;
 }
 
 static bool find_for_m_and_dimension(int m, int d, int thread_count) {
@@ -270,23 +247,22 @@ static bool find_for_m_and_dimension(int m, int d, int thread_count) {
         return false;
     }
 
-    const auto disp_info = precompute_displacements(m, lattice);
-
-    vector<int> even_masks;
-    even_masks.reserve(1 << (d - 1));
-    for (int mask = 0; mask < (1 << d); ++mask) {
-        if ((__builtin_popcount(static_cast<unsigned>(mask)) & 1) == 0) {
-            even_masks.push_back(mask);
-        }
+    vector<Point> reps;
+    reps.reserve(pairs.size());
+    for (const auto& pr : pairs) {
+        const Point& a = pr[0];
+        const Point& b = pr[1];
+        const bool take_a = (a.x > b.x) || (a.x == b.x && a.y > b.y);
+        reps.push_back(take_a ? a : b);
     }
 
-    const int u = static_cast<int>(pairs.size());
+    const auto bad_disp = build_bad_displacements(lattice);
+
+    const int u = static_cast<int>(reps.size());
     const int first_max = u - d;
     if (first_max < 0) {
         return false;
     }
-
-    const bool exhaustive_signs = (d <= 6);
 
     if (thread_count <= 0) {
         thread_count = 1;
@@ -296,39 +272,15 @@ static bool find_for_m_and_dimension(int m, int d, int thread_count) {
     std::atomic<bool> found{false};
 
     auto worker = [&](int tid) {
-        vector<int> combo(d, 0);
         vector<Point> selected(d);
 
         std::function<void(int, int)> dfs = [&](int pos, int next_idx) {
             if (found.load(std::memory_order_relaxed)) {
                 return;
             }
-
             if (pos == d) {
-                if (exhaustive_signs) {
-                    const int sign_masks = 1 << d;
-                    for (int sm = 0; sm < sign_masks; ++sm) {
-                        if (found.load(std::memory_order_relaxed)) {
-                            return;
-                        }
-                        if (sm & 1) {
-                            continue;
-                        }
-                        for (int i = 0; i < d; ++i) {
-                            selected[i] = pairs[combo[i]][(sm >> i) & 1];
-                        }
-                        if (test_selected_vectors(selected, disp_info, even_masks)) {
-                            found.store(true, std::memory_order_relaxed);
-                            return;
-                        }
-                    }
-                } else {
-                    for (int i = 0; i < d; ++i) {
-                        selected[i] = pairs[combo[i]][0];
-                    }
-                    if (test_selected_vectors(selected, disp_info, even_masks)) {
-                        found.store(true, std::memory_order_relaxed);
-                    }
+                if (test_selected_vectors(selected, bad_disp)) {
+                    found.store(true, std::memory_order_relaxed);
                 }
                 return;
             }
@@ -339,7 +291,10 @@ static bool find_for_m_and_dimension(int m, int d, int thread_count) {
                 if (found.load(std::memory_order_relaxed)) {
                     return;
                 }
-                combo[pos] = i;
+                selected[pos] = reps[i];
+                if (four_tuple_has_forbidden_sum(selected, pos + 1, bad_disp)) {
+                    continue;
+                }
                 dfs(pos + 1, i + 1);
             }
         };
@@ -348,7 +303,7 @@ static bool find_for_m_and_dimension(int m, int d, int thread_count) {
             if (found.load(std::memory_order_relaxed)) {
                 return;
             }
-            combo[0] = first;
+            selected[0] = reps[first];
             dfs(1, first + 1);
         }
     };
@@ -363,65 +318,6 @@ static bool find_for_m_and_dimension(int m, int d, int thread_count) {
     }
 
     return found.load(std::memory_order_relaxed);
-}
-
-int count_split_primes_distinct(uint64_t m) {
-    int count = 0;
-    for (uint64_t p = 2; p * p <= m; ++p) {
-        if (m % p != 0) {
-            continue;
-        }
-        int exponent = 0;
-        while (m % p == 0) {
-            m /= p;
-            ++exponent;
-        }
-        if (exponent > 0 && (p % 4 == 1)) {
-            ++count;
-        }
-    }
-    if (m > 1 && (m % 4 == 1)) {
-        ++count;
-    }
-    return count;
-}
-
-uint64_t product_of_first_split_primes(size_t k) {
-    uint64_t product = 1;
-
-    auto is_prime = [](uint64_t x) {
-        if (x < 2) {
-            return false;
-        }
-        if (x % 2 == 0) {
-            return x == 2;
-        }
-        for (uint64_t d = 3; d * d <= x; d += 2) {
-            if (x % d == 0) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    uint64_t p = 2;
-    size_t found = 0;
-    while (found < k) {
-        ++p;
-        if (!is_prime(p) || (p % 4 != 1)) {
-            continue;
-        }
-
-        const __uint128_t tmp = static_cast<__uint128_t>(product) * p;
-        if (tmp > std::numeric_limits<uint64_t>::max()) {
-            throw std::overflow_error("overflow in product_of_first_split_primes");
-        }
-
-        product = static_cast<uint64_t>(tmp);
-        ++found;
-    }
-
-    return product;
 }
 
 uint64_t solve_r_sq(uint64_t n, int thread_count = 1) {
@@ -444,7 +340,8 @@ uint64_t solve_r_sq(uint64_t n, int thread_count = 1) {
 
     int m = 1;
     while (true) {
-        if (find_for_m_and_dimension(m, dimension, thread_count)) {
+        if (opposite_pair_count_by_factorization(static_cast<uint64_t>(m)) >= dimension &&
+            find_for_m_and_dimension(m, dimension, thread_count)) {
             return static_cast<uint64_t>(m);
         }
         ++m;
@@ -472,10 +369,10 @@ bool run_checkpoints(int thread_count) {
     }
 
     uint64_t prev = 0;
-    for (uint64_t n = 2; n <= 8; ++n) {
-        const uint64_t cur = solve_r_sq(n, thread_count);
-        if (n > 2 && cur < prev) {
-            cerr << "Checkpoint failed: monotonicity violated at n=" << n << "\n";
+    for (uint64_t ncheck = 2; ncheck <= 8; ++ncheck) {
+        const uint64_t cur = solve_r_sq(ncheck, thread_count);
+        if (ncheck > 2 && cur < prev) {
+            cerr << "Checkpoint failed: monotonicity violated at n=" << ncheck << "\n";
             return false;
         }
         prev = cur;

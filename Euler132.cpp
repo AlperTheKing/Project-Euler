@@ -77,27 +77,41 @@ u64 mul_mod(u64 a, u64 b, u64 mod) {
     return static_cast<u64>((static_cast<u128>(a) * static_cast<u128>(b)) % mod);
 }
 
-u64 pow_mod(u64 base, u64 exp, u64 mod) {
-    u64 result = 1 % mod;
-    base %= mod;
-    while (exp > 0) {
-        if ((exp & 1ULL) != 0ULL) {
-            result = mul_mod(result, base, mod);
-        }
-        base = mul_mod(base, base, mod);
-        exp >>= 1ULL;
+u64 repunit_mod(u64 n, u64 mod) {
+    if (mod == 1) {
+        return 0;
     }
-    return result;
+
+    u64 pow10 = 1 % mod;
+    u64 repunit = 0;
+    const u64 ten_mod = 10 % mod;
+
+    int msb = 63;
+    while (msb > 0 && ((n >> msb) & 1ULL) == 0ULL) {
+        --msb;
+    }
+
+    for (int bit = msb; bit >= 0; --bit) {
+        repunit = (mul_mod(repunit, pow10, mod) + repunit) % mod;
+        pow10 = mul_mod(pow10, pow10, mod);
+
+        if (((n >> bit) & 1ULL) != 0ULL) {
+            repunit = (mul_mod(repunit, ten_mod, mod) + 1ULL) % mod;
+            pow10 = mul_mod(pow10, ten_mod, mod);
+        }
+    }
+
+    return repunit;
 }
 
-bool is_prime(int n) {
-    if (n < 2) {
+bool is_prime(int n, const std::vector<int>& primes) {
+    if (n <= 1) {
         return false;
     }
-    if ((n % 2) == 0) {
-        return n == 2;
-    }
-    for (int p = 3; static_cast<std::int64_t>(p) * p <= n; p += 2) {
+    for (int p : primes) {
+        if (static_cast<std::int64_t>(p) * p > n) {
+            break;
+        }
         if ((n % p) == 0) {
             return false;
         }
@@ -105,15 +119,31 @@ bool is_prime(int n) {
     return true;
 }
 
+bool divides_repunit(int p, u64 exponent) {
+    return repunit_mod(exponent, static_cast<u64>(p)) == 0ULL;
+}
+
 u64 solve(const int wanted, const u64 exponent) {
     int found = 0;
     u64 sum = 0;
+    std::vector<int> primes;
+    primes.reserve(4096);
+    primes.push_back(2);
 
-    for (int p = 2; found < wanted; ++p) {
-        if (!is_prime(p) || p == 2 || p == 5) {
+    if (wanted <= 0) {
+        return 0;
+    }
+
+    for (int p = 3; found < wanted; p += 2) {
+        if (!is_prime(p, primes)) {
             continue;
         }
-        if (pow_mod(10ULL, exponent, static_cast<u64>(p)) == 1ULL) {
+        primes.push_back(p);
+
+        if (p == 5) {
+            continue;
+        }
+        if (divides_repunit(p, exponent)) {
             ++found;
             sum += static_cast<u64>(p);
         }
@@ -123,8 +153,16 @@ u64 solve(const int wanted, const u64 exponent) {
 }
 
 bool run_checkpoints() {
+    if (solve(4, 10ULL) != 9414ULL) {
+        std::cerr << "Checkpoint failed for first 4 factors of R(10)" << '\n';
+        return false;
+    }
     if (solve(4, 6ULL) != 34ULL) {
         std::cerr << "Checkpoint failed for first 4 factors of R(10^6)" << '\n';
+        return false;
+    }
+    if (divides_repunit(3, 10ULL) || !divides_repunit(3, 3ULL)) {
+        std::cerr << "Checkpoint failed for prime 3 divisibility behavior" << '\n';
         return false;
     }
     return true;

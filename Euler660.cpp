@@ -7,6 +7,7 @@
 #include <numeric>
 #include <thread>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -83,9 +84,31 @@ u64 ceil_div_u64(u64 a, u64 b) {
     return (a + b - 1) / b;
 }
 
-u64 search_base_max_c(int base, int m_max) {
+struct TripleKey {
+    u64 a;
+    u64 b;
+    u64 c;
+};
+
+struct TripleHash {
+    std::size_t operator()(const TripleKey& t) const noexcept {
+        std::size_t h = static_cast<std::size_t>(t.a);
+        h ^= static_cast<std::size_t>(t.b) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        h ^= static_cast<std::size_t>(t.c) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+struct TripleEq {
+    bool operator()(const TripleKey& x, const TripleKey& y) const noexcept {
+        return x.a == y.a && x.b == y.b && x.c == y.c;
+    }
+};
+
+u64 search_base_sum_c(int base, int m_max) {
     const auto tuples = build_length_tuples(base);
-    u64 best = 0;
+    std::unordered_set<TripleKey, TripleHash, TripleEq> seen;
+    u64 sum_c = 0;
 
     for (int m = 2; m <= m_max; ++m) {
         for (int n = 1; n < m; ++n) {
@@ -120,16 +143,17 @@ u64 search_base_max_c(int base, int m_max) {
                     const u64 b = s2 * d;
                     const u64 c = s3 * d;
                     if (!is_pandigital_triangle(a, b, c, base)) continue;
-                    if (c > best) best = c;
+                    const TripleKey key{a, b, c};
+                    if (seen.insert(key).second) sum_c += c;
                 }
             }
         }
     }
 
-    return best;
+    return sum_c;
 }
 
-u64 brute_base9_max_c() {
+u64 brute_base9_sum_c() {
     std::array<int, 9> d{};
     for (int i = 0; i < 9; ++i) d[static_cast<std::size_t>(i)] = i;
 
@@ -139,7 +163,8 @@ u64 brute_base9_max_c() {
         return v;
     };
 
-    u64 best = 0;
+    std::unordered_set<TripleKey, TripleHash, TripleEq> seen;
+    u64 sum_c = 0;
     do {
         for (int i = 1; i <= 7; ++i) {
             for (int j = i + 1; j <= 8; ++j) {
@@ -156,17 +181,18 @@ u64 brute_base9_max_c() {
 
                 if (a * a + b * b + a * b != c * c) continue;
                 if (!is_pandigital_triangle(a, b, c, 9)) continue;
-                if (c > best) best = c;
+                const TripleKey key{a, b, c};
+                if (seen.insert(key).second) sum_c += c;
             }
         }
     } while (std::next_permutation(d.begin(), d.end()));
-    return best;
+    return sum_c;
 }
 
 u64 solve() {
     assert(217ULL * 217ULL + 248ULL * 248ULL + 217ULL * 248ULL == 403ULL * 403ULL);
     assert(is_pandigital_triangle(217, 248, 403, 9));
-    assert(brute_base9_max_c() == 679ULL);
+    assert(brute_base9_sum_c() == 1082ULL);
 
     constexpr int kMMax = 20'000;
 
@@ -181,7 +207,7 @@ u64 solve() {
         while (true) {
             const int base = next_base.fetch_add(1);
             if (base > 18) break;
-            best[static_cast<std::size_t>(base)] = search_base_max_c(base, kMMax);
+            best[static_cast<std::size_t>(base)] = search_base_sum_c(base, kMMax);
         }
     };
 
@@ -190,7 +216,7 @@ u64 solve() {
     for (unsigned t = 0; t < threads; ++t) pool.emplace_back(worker);
     for (auto& th : pool) th.join();
 
-    assert(best[9] == 679ULL);
+    assert(best[9] == 1082ULL);
 
     u64 sum = 0;
     for (int base = 9; base <= 18; ++base) sum += best[static_cast<std::size_t>(base)];

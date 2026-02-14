@@ -48,7 +48,7 @@ static int D_value(int n) {
     }
 
     std::vector<int> dp0(n, 0), dp1(n, 0);
-    for (int t = static_cast<int>(order.size()) - 1; t >= 0; --t) {
+    for (int t = 0; t < static_cast<int>(order.size()); ++t) {
         int u = order[t];
         int base = 0;
         int best = 0;

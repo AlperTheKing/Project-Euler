@@ -60,7 +60,7 @@ std::string non_six_digits_large_n(std::int64_t n, int wanted) {
     const std::int64_t shift = static_cast<std::int64_t>(
         boost::multiprecision::floor(-log10_eps).convert_to<long long>());
     const Dec frac = -log10_eps - Dec(shift);
-    const Dec t = sign * boost::multiprecision::pow(Dec(10), frac);  // epsilon * 10^shift
+    const Dec t = sign * boost::multiprecision::pow(Dec(10), -frac);
 
     const Dec base = Dec(2) / 3 + t;
     const int q = static_cast<int>(boost::multiprecision::floor(base));

@@ -44,18 +44,11 @@ struct Comb {
 };
 
 static int F30(int n, const Comb &cb) {
-    // Hilbert series: H(t)=sum F(30,n)t^n = P(t)/(1-t)^11
-    static constexpr int Pdeg = 15;
-    static const int p[Pdeg + 1] = {
-        1, 19, 33, 6, 0, 0, 0, 0, 0, 0, 0, -3, -33, -26, -6, 7,
-    };
-
     int ans = 0;
-    for (int k = 0; k <= Pdeg; ++k) {
-        if (k > n) break;
-        int ways = cb.C(n - k + 10, 10);
-        ans = mod_add(ans, mod_mul(p[k], ways));
-    }
+    ans = mod_add(ans, cb.C(n + 10, 10));
+    if (n >= 1) ans = mod_add(ans, mod_mul(19, cb.C(n + 9, 10)));
+    if (n >= 2) ans = mod_add(ans, mod_mul(33, cb.C(n + 8, 10)));
+    if (n >= 3) ans = mod_add(ans, mod_mul(6, cb.C(n + 7, 10)));
     return ans;
 }
 
@@ -88,8 +81,9 @@ int main() {
     assert(F30(2, cb) == 308);
     assert(F30(3, cb) == 1909);
     assert(F30(4, cb) == 8679);
+    assert(F30(11, cb) == 7'174'102);
+    assert(F30(15, cb) == 82'166'678);
 
     std::cout << F30(N, cb) << "\n";
     return 0;
 }
-

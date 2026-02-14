@@ -2,219 +2,121 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <thread>
 #include <vector>
 
 using i64 = long long;
 
-struct State {
-    int sum;
-    int block;
+struct BitMin {
+    int n;
+    std::vector<int> bit;
+    std::vector<int> arr;
+    static constexpr int INF = 1'000'000'000;
+
+    explicit BitMin(const std::vector<int>& initial)
+        : n(static_cast<int>(initial.size()) - 1), bit(static_cast<std::size_t>(n + 1), INF), arr(initial) {
+        for (int i = 1; i <= n; ++i) update_bit_min(rev_index(i), arr[static_cast<std::size_t>(i)]);
+    }
+
+    void update(int i, int new_val) {
+        if (new_val >= arr[static_cast<std::size_t>(i)]) return;
+        arr[static_cast<std::size_t>(i)] = new_val;
+        update_bit_min(rev_index(i), new_val);
+    }
+
+    int suffix_min(int i) const {
+        if (i == 0) return 0;
+        int ans = arr[static_cast<std::size_t>(i)];
+        for (int x = rev_index(i); x > 0; x -= x & -x) ans = std::min(ans, bit[static_cast<std::size_t>(x)]);
+        return ans;
+    }
+
+    int rev_index(int idx) const { return n - idx + 1; }
+
+    void update_bit_min(int idx, int val) {
+        for (int x = idx; x <= n; x += x & -x) {
+            int& cur = bit[static_cast<std::size_t>(x)];
+            if (val < cur) cur = val;
+        }
+    }
 };
 
-static bool can_reach_pow3_one_step_digits(const int *digits, int len, int max_target,
-                                           const std::vector<uint8_t> &is_pow3) {
-    static thread_local State buf1[1 << 14], buf2[1 << 14];
-    State *cur = buf1;
-    State *nxt = buf2;
-
-    int curN = 1;
-    cur[0] = {0, digits[0]};
-
-    for (int pos = 1; pos < len; ++pos) {
-        const int d = digits[pos];
-        int nxtN = 0;
-        for (int i = 0; i < curN; ++i) {
-            const int s = cur[i].sum;
-            const int b = cur[i].block;
-
-            const int s_split = s + b;
-            const int b_split = d;
-            if (s_split + b_split <= max_target) nxt[nxtN++] = {s_split, b_split};
-
-            const int b_cat = b * 3 + d;
-            if (s + b_cat <= max_target) nxt[nxtN++] = {s, b_cat};
-        }
-        curN = nxtN;
-        std::swap(cur, nxt);
+static int digit_sum(int n, int b) {
+    int s = 0;
+    while (n > 0) {
+        s += n % b;
+        n /= b;
     }
-
-    for (int i = 0; i < curN; ++i) {
-        const int total = cur[i].sum + cur[i].block;
-        if (is_pow3[total]) return true;
-    }
-    return false;
+    return s;
 }
 
-static void init_digits(int x, int base, int *digits, int len, int &sum) {
-    sum = 0;
-    for (int i = 0; i < len; ++i) digits[i] = 0;
-    int pos = 0;
-    while (x > 0 && pos < len) {
-        digits[pos] = x % base;
-        sum += digits[pos];
-        x /= base;
-        ++pos;
-    }
-}
+struct Node {
+    int krem;
+    int digit_sum_rem;
+    int exp;
+    int curr_part;
+    int part_sum;
+};
 
-static inline void inc_digits(int base, int max_digit, int *digits, int len, int &sum) {
-    int pos = 0;
-    while (true) {
-        if (digits[pos] < max_digit) {
-            ++digits[pos];
-            ++sum;
-            return;
-        }
-        digits[pos] = 0;
-        sum -= max_digit;
-        ++pos;
-    }
-}
+static std::vector<int> f_steps(int n, int b) {
+    std::vector<int> steps(static_cast<std::size_t>(n + 1), 0);
+    for (int i = b; i <= n; ++i) steps[static_cast<std::size_t>(i)] = n;
 
-static i64 g_worker(int lo, int hi, const std::vector<int> &pow3, const std::vector<uint8_t> &is_pow3) {
-    int d10[8], d3[15];
-    int s10 = 0, s3 = 0;
-    init_digits(lo, 10, d10, 8, s10);
-    init_digits(lo, 3, d3, 15, s3);
+    BitMin bit_min(steps);
 
-    int pow_idx = 0;
-    while (pow_idx + 1 < (int)pow3.size() && pow3[pow_idx + 1] <= lo) ++pow_idx;
-    int max_target = pow3[pow_idx];
+    std::vector<int> b_pows;
+    for (i64 p = 1; p <= n; p *= b) b_pows.push_back(static_cast<int>(p));
 
-    i64 ans = 0;
-    for (int i = lo; i <= hi; ++i) {
-        while (pow_idx + 1 < (int)pow3.size() && pow3[pow_idx + 1] <= i) {
-            ++pow_idx;
-            max_target = pow3[pow_idx];
-        }
+    std::vector<Node> st;
+    st.reserve(1 << 14);
 
-        const int f10 = (i < 10) ? 0 : (s10 < 10 ? 1 : 2);
-        int f3 = 0;
-        if (i < 3) {
-            f3 = 0;
-        } else if (s3 < 3) {
-            f3 = 1;
-        } else if ((i & 1) == 0) {
-            f3 = 2;
-        } else if (f10 == 2) {
-            int ms = 14;
-            while (ms > 0 && d3[ms] == 0) --ms;
-            int digits[15];
-            int len = 0;
-            for (int t = ms; t >= 0; --t) digits[len++] = d3[t];
-            f3 = can_reach_pow3_one_step_digits(digits, len, max_target, is_pow3) ? 2 : 3;
-        } else {
-            f3 = 2;
-        }
+    for (int k = b; k <= n; ++k) {
+        const int dsum = digit_sum(k, b);
+        int current_min = steps[static_cast<std::size_t>(dsum)] + 1;
 
-        if (f10 == f3) ans += i;
-        if (i == hi) break;
-        inc_digits(10, 9, d10, 8, s10);
-        inc_digits(3, 2, d3, 15, s3);
-    }
-    return ans;
-}
+        st.clear();
+        st.push_back({k, dsum, 0, 0, 0});
 
-static i64 g(int n) {
-    std::vector<int> pow3;
-    for (int x = 3; x <= n; x *= 3) pow3.push_back(x);
-    assert(!pow3.empty());
+        while (!st.empty()) {
+            const Node cur = st.back();
+            st.pop_back();
 
-    const int max_pow = pow3.back();
-    std::vector<uint8_t> is_pow3(max_pow + 1, 0);
-    for (int x : pow3) is_pow3[x] = 1;
+            const int smallest = cur.digit_sum_rem + cur.part_sum + cur.curr_part;
+            const int cand = steps[static_cast<std::size_t>(smallest)] + 1;
+            if (cand < current_min) current_min = cand;
 
-    int threads = (int)std::thread::hardware_concurrency();
-    if (threads <= 0) threads = 4;
-    if (threads > 12) threads = 12;
-    if (n < 200'000) threads = 1;
+            if (bit_min.suffix_min(smallest) + 1 >= current_min) continue;
+            if (cur.krem == 0) continue;
 
-    std::vector<std::thread> ts;
-    std::vector<i64> partial(threads, 0);
-    ts.reserve(threads);
+            const int digit = cur.krem % b;
+            const int next_k = cur.krem / b;
+            const int next_sum = cur.digit_sum_rem - digit;
 
-    const int chunk = (n + threads - 1) / threads;
-    for (int t = 0; t < threads; ++t) {
-        const int lo = t * chunk + 1;
-        const int hi = std::min(n, (t + 1) * chunk);
-        if (lo > hi) continue;
-        ts.emplace_back([&, t, lo, hi]() { partial[t] = g_worker(lo, hi, pow3, is_pow3); });
-    }
-    for (auto &th : ts) th.join();
-    i64 ans = 0;
-    for (i64 x : partial) ans += x;
-    return ans;
-}
-
-static int f3_exact_small(int n, std::vector<int> &memo) {
-    if (n < 3) return 0;
-    int &res = memo[n];
-    if (res != -1) return res;
-
-    int digits[20];
-    int len = 0;
-    int x = n;
-    while (x > 0) {
-        digits[len++] = x % 3;
-        x /= 3;
-    }
-    for (int i = 0; i < len / 2; ++i) std::swap(digits[i], digits[len - 1 - i]);
-
-    int best = 100;
-    const int masks = 1 << (len - 1);
-    for (int mask = 1; mask < masks; ++mask) {
-        int sum = 0;
-        int cur = digits[0];
-        for (int i = 1; i < len; ++i) {
-            if (mask & (1 << (i - 1))) {
-                sum += cur;
-                cur = digits[i];
-            } else {
-                cur = cur * 3 + digits[i];
+            if (cur.exp != 0) {
+                const int next_curr = cur.curr_part + digit * b_pows[static_cast<std::size_t>(cur.exp)];
+                st.push_back({next_k, next_sum, cur.exp + 1, next_curr, cur.part_sum});
             }
+            st.push_back({next_k, next_sum, 1, digit, cur.part_sum + cur.curr_part});
         }
-        sum += cur;
-        best = std::min(best, 1 + f3_exact_small(sum, memo));
+
+        steps[static_cast<std::size_t>(k)] = current_min;
+        bit_min.update(k, current_min);
     }
-    res = best;
-    return res;
+
+    return steps;
 }
 
-static int f3_fast_single(int n, const std::vector<int> &pow3, const std::vector<uint8_t> &is_pow3) {
-    if (n < 3) return 0;
-    int s3 = 0;
-    int digits[20];
-    int len = 0;
-    int x = n;
-    while (x > 0) {
-        digits[len++] = x % 3;
-        s3 += digits[len - 1];
-        x /= 3;
+static i64 g(int n, int b1, int b2) {
+    std::vector<int> s1 = f_steps(n, b1);
+    std::vector<int> s2 = f_steps(n, b2);
+    i64 total = 0;
+    for (int k = 1; k <= n; ++k) {
+        if (s1[static_cast<std::size_t>(k)] == s2[static_cast<std::size_t>(k)]) total += k;
     }
-    for (int i = 0; i < len / 2; ++i) std::swap(digits[i], digits[len - 1 - i]);
-    if (s3 < 3) return 1;
-    if ((n & 1) == 0) return 2;
-
-    int max_target = pow3[0];
-    for (int t : pow3) {
-        if (t > n) break;
-        max_target = t;
-    }
-    return can_reach_pow3_one_step_digits(digits, len, max_target, is_pow3) ? 2 : 3;
+    return total;
 }
 
 int main() {
-    assert(g(100) == 3302);
-    {
-        std::vector<int> pow3;
-        for (int x = 3; x <= 10'000'000; x *= 3) pow3.push_back(x);
-        std::vector<uint8_t> is_pow3(pow3.back() + 1, 0);
-        for (int x : pow3) is_pow3[x] = 1;
-
-        std::vector<int> memo(2001, -1);
-        for (int i = 1; i <= 2000; ++i) assert(f3_fast_single(i, pow3, is_pow3) == f3_exact_small(i, memo));
-    }
-    std::cout << g(10'000'000) << "\n";
+    assert(g(100, 10, 3) == 3302);
+    std::cout << g(10'000'000, 10, 3) << '\n';
     return 0;
 }

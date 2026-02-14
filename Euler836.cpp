@@ -17,7 +17,7 @@ int main() {
     answer.reserve(words.size());
     for (const std::string& w : words) {
         assert(!w.empty());
-        answer.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(w.front()))));
+        answer.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(w.front()))));
     }
 
     std::cout << answer << '\n';

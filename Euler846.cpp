@@ -1,203 +1,173 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <optional>
+#include <utility>
 #include <vector>
-#include <cmath>
-#include <functional>
 
-using u64 = std::uint64_t;
-using u128 = unsigned __int128;
+template <typename T>
+struct GcdResult {
+    T gcd;
+    T coeff_a;
+    T coeff_b;
+};
 
-static u64 mod_pow(u64 a, u64 e, u64 mod) {
-    u64 r = 1 % mod;
-    a %= mod;
-    while (e > 0) {
-        if (e & 1ULL) r = static_cast<u64>((static_cast<u128>(r) * a) % mod);
-        a = static_cast<u64>((static_cast<u128>(a) * a) % mod);
-        e >>= 1ULL;
+template <typename T>
+static GcdResult<T> extended_gcd(T a, T b) {
+    T x = a, y = b;
+    T ax = 1, ay = 0;
+    T bx = 0, by = 1;
+    while (x != 0) {
+        const T k = y / x;
+        y %= x;
+        ay -= k * ax;
+        by -= k * bx;
+        std::swap(x, y);
+        std::swap(ax, ay);
+        std::swap(bx, by);
     }
-    return r;
+    return {y, ay, by};
 }
 
-static u64 tonelli_shanks(u64 n, u64 p) {
-    if (n == 0) return 0;
-    if (p == 2) return n;
-    if (mod_pow(n, (p - 1) / 2, p) != 1) return 0;
-    if (p % 4 == 3) return mod_pow(n, (p + 1) / 4, p);
+struct GaussianInt {
+    int x;
+    int y;
 
-    u64 q = p - 1;
-    u64 s = 0;
-    while ((q & 1ULL) == 0) {
-        q >>= 1ULL;
-        ++s;
+    friend GaussianInt operator*(const GaussianInt& a, const GaussianInt& b) {
+        return {a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x};
     }
 
-    u64 z = 2;
-    while (mod_pow(z, (p - 1) / 2, p) != p - 1) ++z;
+    int norm() const { return x * x + y * y; }
+};
 
-    u64 c = mod_pow(z, q, p);
-    u64 x = mod_pow(n, (q + 1) / 2, p);
-    u64 t = mod_pow(n, q, p);
-    u64 m = s;
-
-    while (t != 1) {
-        u64 i = 1;
-        u64 tt = static_cast<u64>((static_cast<u128>(t) * t) % p);
-        while (tt != 1) {
-            tt = static_cast<u64>((static_cast<u128>(tt) * tt) % p);
-            ++i;
+static int64_t solve_F(const int N) {
+    std::vector<int> primes;
+    primes.reserve(static_cast<std::size_t>(N / 2));
+    std::vector<int> spf(static_cast<std::size_t>(N + 1), 0);
+    for (int i = 2; i <= N; ++i) {
+        if (spf[static_cast<std::size_t>(i)] == 0) {
+            spf[static_cast<std::size_t>(i)] = i;
+            primes.push_back(i);
         }
-        u64 b = mod_pow(c, 1ULL << (m - i - 1), p);
-        x = static_cast<u64>((static_cast<u128>(x) * b) % p);
-        c = static_cast<u64>((static_cast<u128>(b) * b) % p);
-        t = static_cast<u64>((static_cast<u128>(t) * c) % p);
-        m = i;
-    }
-    return x;
-}
-
-static u64 isqrt_u64(u64 x) {
-    u64 r = static_cast<u64>(std::sqrt(static_cast<long double>(x)));
-    while ((r + 1) > 0 && (r + 1) * (r + 1) <= x) ++r;
-    while (r * r > x) --r;
-    return r;
-}
-
-static std::string to_string_u128(u128 x) {
-    if (x == 0) return "0";
-    std::string s;
-    while (x > 0) {
-        s.push_back(static_cast<char>('0' + (x % 10)));
-        x /= 10;
-    }
-    std::reverse(s.begin(), s.end());
-    return s;
-}
-
-static u128 solve_F(u64 N) {
-    std::vector<bool> is_prime(N + 1, true);
-    is_prime[0] = false;
-    if (N >= 1) is_prime[1] = false;
-    for (u64 i = 2; i * i <= N; ++i) {
-        if (!is_prime[i]) continue;
-        for (u64 j = i * i; j <= N; j += i) is_prime[j] = false;
-    }
-
-    std::vector<int> root_odd(N + 1, -1);
-    std::vector<int> vals;
-    vals.reserve(70000);
-    vals.push_back(1);
-    if (N >= 2) vals.push_back(2);
-
-    for (u64 p = 3; p <= N; p += 2) {
-        if (!is_prime[p] || p % 4 != 1) continue;
-        u64 r = tonelli_shanks(p - 1, p);
-        u64 m = p;
-        while (m <= N) {
-            if (root_odd[m] == -1) root_odd[m] = static_cast<int>(r);
-            vals.push_back(static_cast<int>(m));
-            if (2 * m <= N) vals.push_back(static_cast<int>(2 * m));
-
-            if (m > N / p) break;
-            u64 f_div_m = static_cast<u64>(((static_cast<u128>(r) * r + 1) / m) % p);
-            u64 inv = mod_pow((2 * (r % p)) % p, p - 2, p);
-            u64 t = (p - static_cast<u64>((static_cast<u128>(f_div_m) * inv) % p)) % p;
-            r += t * m;
-            m *= p;
-            r %= m;
+        for (const int p : primes) {
+            if (static_cast<int64_t>(p) * i > N) break;
+            spf[static_cast<std::size_t>(p * i)] = p;
+            if (p == spf[static_cast<std::size_t>(i)]) break;
         }
     }
 
-    std::sort(vals.begin(), vals.end());
-    vals.erase(std::unique(vals.begin(), vals.end()), vals.end());
-
-    std::vector<int> id(N + 1, -1);
-    for (int i = 0; i < static_cast<int>(vals.size()); ++i) id[vals[i]] = i;
-
-    std::vector<char> allowed(N + 1, 0);
-    for (int v : vals) allowed[v] = 1;
-
-    std::vector<std::vector<int>> adj(vals.size());
-    for (int va : vals) {
-        std::vector<u64> roots;
-        if (va == 1) {
-            roots.push_back(0);
-        } else if (va == 2) {
-            roots.push_back(1);
-        } else if ((va & 1) == 0) {
-            u64 m = static_cast<u64>(va / 2);
-            int rr = root_odd[m];
-            if (rr == -1) continue;
-            u64 r1 = static_cast<u64>(rr);
-            u64 r2 = m - r1;
-            u64 mod = 2 * m;
-            if ((r1 & 1ULL) == 0) r1 += m;
-            if ((r2 & 1ULL) == 0) r2 += m;
-            r1 %= mod;
-            r2 %= mod;
-            roots.push_back(r1);
-            if (r2 != r1) roots.push_back(r2);
-        } else {
-            int rr = root_odd[va];
-            if (rr == -1) continue;
-            u64 r1 = static_cast<u64>(rr);
-            u64 r2 = static_cast<u64>(va) - r1;
-            roots.push_back(r1);
-            if (r2 != r1) roots.push_back(r2);
-        }
-
-        u64 limit = isqrt_u64(static_cast<u64>(static_cast<u128>(va) * N - 1));
-        int ia = id[va];
-        for (u64 r : roots) {
-            u64 x = r;
-            if (x == 0) x += va;
-            for (; x <= limit; x += va) {
-                u64 b = (x * x + 1) / static_cast<u64>(va);
-                if (b > N || b <= static_cast<u64>(va)) continue;
-                if (!allowed[b]) continue;
-                int ib = id[b];
-                if (ib < 0 || ib == ia) continue;
-                adj[ia].push_back(ib);
-                adj[ib].push_back(ia);
-            }
-        }
+    std::vector<int> exact_sqrt(static_cast<std::size_t>(N + 1), 0);
+    for (int i = 1; static_cast<int64_t>(i) * i <= N; ++i) {
+        exact_sqrt[static_cast<std::size_t>(i * i)] = i;
     }
 
-    for (auto& v : adj) {
-        std::sort(v.begin(), v.end());
-        v.erase(std::unique(v.begin(), v.end()), v.end());
-    }
+    std::vector<std::optional<GaussianInt>> vals(static_cast<std::size_t>(N + 1));
 
-    std::vector<char> vis(vals.size(), 0);
-    u128 total_oriented = 0;
-
-    std::function<void(int, int, int, u128)> dfs = [&](int start, int u, int depth, u128 sumv) {
-        for (int v : adj[u]) {
-            if (v < start) continue;
-            if (v == start) {
-                if (depth >= 3) total_oriented += sumv;
-            } else if (!vis[v]) {
-                vis[v] = 1;
-                dfs(start, v, depth + 1, sumv + static_cast<u128>(vals[v]));
-                vis[v] = 0;
-            }
-        }
+    const auto normalize = [](GaussianInt a) -> GaussianInt {
+        a.x = std::abs(a.x);
+        a.y = std::abs(a.y);
+        if (a.x < a.y) std::swap(a.x, a.y);
+        assert(a.x >= a.y);
+        return a;
     };
 
-    for (int s = 0; s < static_cast<int>(vals.size()); ++s) {
-        if (adj[s].size() < 2) continue;
-        vis[s] = 1;
-        dfs(s, s, 1, static_cast<u128>(vals[s]));
-        vis[s] = 0;
+    vals[1] = GaussianInt{1, 0};
+    if (N >= 2) vals[2] = GaussianInt{1, 1};
+
+    for (const int p : primes) {
+        if (p == 2 || (p & 3) == 3) continue;
+
+        int a = 0, b = 0;
+        for (int i = 1;; ++i) {
+            const int rem = p - i * i;
+            if (rem >= 0 && exact_sqrt[static_cast<std::size_t>(rem)] != 0) {
+                a = i;
+                b = exact_sqrt[static_cast<std::size_t>(rem)];
+                break;
+            }
+        }
+        assert(a <= b);
+
+        GaussianInt cur{1, 0};
+        for (int q = 1; static_cast<int64_t>(q) * p <= N;) {
+            q *= p;
+            cur = cur * GaussianInt{a, b};
+            vals[static_cast<std::size_t>(q)] = normalize(cur);
+            if (2 * q <= N) {
+                vals[static_cast<std::size_t>(2 * q)] = normalize(cur * GaussianInt{1, 1});
+            }
+        }
     }
 
-    return total_oriented / 2;
+    std::vector<std::vector<int>> parents(static_cast<std::size_t>(N + 1));
+    std::vector<std::vector<std::pair<int64_t, int64_t>>> dp(static_cast<std::size_t>(N + 1));
+    for (int i = 1; i <= N; ++i) {
+        if (!vals[static_cast<std::size_t>(i)].has_value()) continue;
+        assert(vals[static_cast<std::size_t>(i)]->norm() == i);
+        if (i == 1) continue;
+
+        auto [g, cx, cy] = extended_gcd(vals[static_cast<std::size_t>(i)]->x, vals[static_cast<std::size_t>(i)]->y);
+        if (g < 0) {
+            g = -g;
+            cx = -cx;
+            cy = -cy;
+        }
+        assert(g == 1);
+
+        GaussianInt p1{std::abs(cy), std::abs(cx)};
+        GaussianInt p2{vals[static_cast<std::size_t>(i)]->x - p1.x, vals[static_cast<std::size_t>(i)]->y - p1.y};
+        if (p1.norm() > p2.norm()) std::swap(p1, p2);
+        if (p1.norm() == p2.norm()) assert(i == 2);
+
+        if (vals[static_cast<std::size_t>(p1.norm())].has_value()) {
+            parents[static_cast<std::size_t>(i)].push_back(p1.norm());
+        }
+        if (i > 2 && vals[static_cast<std::size_t>(p2.norm())].has_value()) {
+            parents[static_cast<std::size_t>(i)].push_back(p2.norm());
+        }
+
+        dp[static_cast<std::size_t>(i)].assign(parents[static_cast<std::size_t>(i)].size(), {0, 0});
+    }
+
+    int64_t ways = 0;
+    int64_t answer = 0;
+    for (int i = N; i >= 1; --i) {
+        auto& pi = parents[static_cast<std::size_t>(i)];
+        auto& dpi = dp[static_cast<std::size_t>(i)];
+
+        for (int z = 0; z < static_cast<int>(pi.size()); ++z) {
+            auto& [cur_ways, cur_sum] = dpi[static_cast<std::size_t>(z)];
+            ways += cur_ways;
+            answer += cur_ways * static_cast<int64_t>(i + pi[static_cast<std::size_t>(z)]) + cur_sum;
+            ++cur_ways;
+        }
+
+        assert(pi.size() <= 2);
+        if (pi.size() == 2) {
+            const int j = pi[1];
+            auto& pj = parents[static_cast<std::size_t>(j)];
+            const int z = static_cast<int>(
+                std::find(pj.begin(), pj.end(), pi[0]) - pj.begin()
+            );
+            assert(z < static_cast<int>(pj.size()) && pj[static_cast<std::size_t>(z)] == pi[0]);
+
+            const auto [w0, s0] = dpi[0];
+            const auto [w1, s1] = dpi[1];
+            auto& [wj, sj] = dp[static_cast<std::size_t>(j)][static_cast<std::size_t>(z)];
+            wj += w0 * w1;
+            sj += w0 * w1 * static_cast<int64_t>(i) + w0 * s1 + w1 * s0;
+        }
+    }
+
+    (void)ways;
+    return answer;
 }
 
 int main() {
     assert(solve_F(20) == 258);
     assert(solve_F(100) == 538768);
-    std::cout << to_string_u128(solve_F(1'000'000)) << '\n';
+    std::cout << solve_F(1'000'000) << '\n';
     return 0;
 }

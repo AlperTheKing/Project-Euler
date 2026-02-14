@@ -1,285 +1,219 @@
-#include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <functional>
-#include <thread>
+#include <unordered_map>
 #include <vector>
-
-using namespace std;
 
 namespace {
 
 constexpr int MOD = 998244353;
 
-int mod_pow(int base, int exp) {
-    long long res = 1;
-    long long cur = base;
-    while (exp > 0) {
-        if (exp & 1) res = (res * cur) % MOD;
-        cur = (cur * cur) % MOD;
-        exp >>= 1;
-    }
-    return static_cast<int>(res);
+inline int add_mod(int a, int b) {
+    int s = a + b;
+    if (s >= MOD) s -= MOD;
+    return s;
 }
 
-int add_mod(int a, int b) {
-    int v = a + b;
-    if (v >= MOD) v -= MOD;
-    return v;
+inline int sub_mod(int a, int b) {
+    int s = a - b;
+    if (s < 0) s += MOD;
+    return s;
 }
 
-int sub_mod(int a, int b) {
-    int v = a - b;
-    if (v < 0) v += MOD;
-    return v;
+inline int mul_mod(long long a, long long b) {
+    return static_cast<int>((static_cast<__int128>(a) * b) % MOD);
 }
 
-int compute_c(int n, uint64_t b) {
-    if (n == 1) return static_cast<int>((b + 1) % MOD);
-    if (b == 0) return 0;
+enum class EdgeType : std::uint8_t { G = 0, O = 1, C = 2 };
 
-    vector<int> positions;
-    for (int i = 63; i >= 0; --i) {
-        if ((b >> i) & 1ULL) positions.push_back(i);
-    }
-    int m = static_cast<int>(positions.size());
-    if (m == 0) return 0;
+struct Edge {
+    EdgeType t{EdgeType::G};
+    int v{0};
+};
 
-    vector<int> seg(m, 0);
-    for (int i = 0; i + 1 < m; ++i) {
-        seg[i] = positions[i] - positions[i + 1] - 1;
-    }
-    seg[m - 1] = positions.back();
+inline Edge G() { return Edge{EdgeType::G, 0}; }
+inline Edge O() { return Edge{EdgeType::O, 0}; }
+inline Edge C(int n) { return Edge{EdgeType::C, n}; }
 
-    vector<int> dims(m, 1);
-    vector<int> stride(m, 1);
-    int P = 1;
-    for (int i = 0; i < m; ++i) {
-        dims[i] = seg[i] + 1;
-        if (i > 0) stride[i] = stride[i - 1] * dims[i - 1];
-        P *= dims[i];
-    }
+inline bool is_g(const Edge& e) { return e.t == EdgeType::G; }
+inline bool is_o(const Edge& e) { return e.t == EdgeType::O; }
+inline bool is_c(const Edge& e) { return e.t == EdgeType::C; }
 
-    int max_seg = 0;
-    for (int s : seg) max_seg = max(max_seg, s);
-    vector<int> fact(max_seg + 1, 1), inv_fact(max_seg + 1, 1);
-    for (int i = 1; i <= max_seg; ++i) {
-        fact[i] = static_cast<int>((1LL * fact[i - 1] * i) % MOD);
+Edge insert_edge(int n, const Edge& e) {
+    if (is_g(e)) return C(n);
+    if (is_o(e)) return (n & 1) ? C(n) : C(0);
+    assert((e.v & n) > 0);
+    return C(n);
+}
+
+Edge up0(const Edge& e) {
+    if (is_c(e)) return C(e.v / 2);
+    if (is_o(e)) return C(0);
+    return G();
+}
+
+Edge up1(const Edge& e) {
+    if (is_c(e)) {
+        if ((e.v & 1) == 0) return C(e.v / 2);
+        return G();
     }
-    if (max_seg > 0) {
-        inv_fact[max_seg] = mod_pow(fact[max_seg], MOD - 2);
-        for (int i = max_seg; i > 0; --i) {
-            inv_fact[i - 1] = static_cast<int>((1LL * inv_fact[i] * i) % MOD);
+    return G();
+}
+
+struct Key {
+    int l;
+    int n;
+    int left_code;
+    int right_code;
+
+    bool operator==(const Key& other) const noexcept {
+        return l == other.l && n == other.n && left_code == other.left_code &&
+               right_code == other.right_code;
+    }
+};
+
+struct KeyHash {
+    std::size_t operator()(const Key& k) const noexcept {
+        std::size_t h = std::hash<int>{}(k.l);
+        auto mix = [&](int x) {
+            std::size_t v = std::hash<int>{}(x);
+            h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6U) + (h >> 2U);
+        };
+        mix(k.n);
+        mix(k.left_code);
+        mix(k.right_code);
+        return h;
+    }
+};
+
+int edge_code(const Edge& e) {
+    if (is_g(e)) return -1;
+    if (is_o(e)) return -2;
+    return e.v;
+}
+
+class Solver774 {
+  public:
+    Solver774(int max_l, int a, int b) : a_(a), b_(b) {
+        fib_pos_.assign(max_l + 2, 0);
+        fib_pos_[0] = 0;
+        fib_pos_[1] = 1;
+        for (int i = 2; i < static_cast<int>(fib_pos_.size()); ++i) {
+            fib_pos_[i] = add_mod(fib_pos_[i - 1], fib_pos_[i - 2]);
         }
-    }
-    auto comb = [&](int nn, int kk) -> int {
-        if (kk < 0 || kk > nn) return 0;
-        return static_cast<int>(
-            (1LL * fact[nn] * inv_fact[kk] % MOD) * inv_fact[nn - kk] % MOD);
-    };
-
-    vector<vector<int>> combs(m);
-    for (int i = 0; i < m; ++i) {
-        combs[i].assign(seg[i] + 1, 0);
-        for (int k = 0; k <= seg[i]; ++k) combs[i][k] = comb(seg[i], k);
+        memo_.reserve(1 << 20U);
     }
 
-    vector<int> size_c(P, 0);
-    vector<uint32_t> nz_mask(P, 0);
-    vector<int> counts(m, 0);
-    function<void(int, int)> enumerate_counts = [&](int idx, int dim) {
-        if (dim == m) {
-            long long prod = 1;
-            uint32_t mask = 0;
-            for (int i = 0; i < m; ++i) {
-                int c = counts[i];
-                prod = (prod * combs[i][c]) % MOD;
-                if (c > 0) mask |= (1u << i);
+    int solve() { return f(a_, b_, G(), G()); }
+
+  private:
+    int a_;
+    int b_;
+    std::vector<int> fib_pos_;
+    std::unordered_map<Key, int, KeyHash> memo_;
+
+    int fib(int x) const {
+        if (x >= 0) return fib_pos_[static_cast<std::size_t>(x)];
+        int n = -x;
+        int v = fib_pos_[static_cast<std::size_t>(n)];
+        if ((n & 1) == 0 && v != 0) v = MOD - v;
+        return v;
+    }
+
+    int f(int l, int n, const Edge& left, const Edge& right) {
+        if ((is_c(left) && left.v == 0) || (is_c(right) && right.v == 0)) return 0;
+
+        const Key key{l, n, edge_code(left), edge_code(right)};
+        auto it = memo_.find(key);
+        if (it != memo_.end()) return it->second;
+
+        int ret = 0;
+
+        if (n == 0) {
+            ret = (l <= 1 && is_g(left) && is_g(right)) ? 1 : 0;
+            memo_.emplace(key, ret);
+            return ret;
+        }
+
+        if (n == 1) {
+            if (is_g(left) && is_g(right)) {
+                ret = (l > 1) ? 1 : 2;
+            } else if ((is_o(left) && is_o(right)) || (is_o(left) && is_g(right)) ||
+                       (is_g(left) && is_o(right))) {
+                ret = 1;
+            } else if (is_c(left) && is_c(right)) {
+                ret = ((left.v & 1) && (right.v & 1)) ? 1 : 0;
+            } else if (is_c(left)) {
+                ret = (left.v & 1) ? 1 : 0;
+            } else if (is_c(right)) {
+                ret = (right.v & 1) ? 1 : 0;
+            } else {
+                ret = 0;
             }
-            size_c[idx] = static_cast<int>(prod);
-            nz_mask[idx] = mask;
-            return;
+            memo_.emplace(key, ret);
+            return ret;
         }
-        int step = stride[dim];
-        for (int c = 0; c <= seg[dim]; ++c) {
-            counts[dim] = c;
-            enumerate_counts(idx + c * step, dim + 1);
-        }
-    };
-    enumerate_counts(0, 0);
 
-    int S = 1 << m;
-    vector<int> boundary(S, m);
-    for (int s = 0; s < S; ++s) {
-        int t = m;
-        for (int i = 0; i < m; ++i) {
-            if ((s & (1 << i)) == 0) {
-                t = i;
-                break;
+        const int m = (n - 1) / 2;
+
+        if (l == 1) {
+            if (is_g(left) && is_g(right)) {
+                ret = (n + 1) % MOD;
+            } else {
+                ret = add_mod(f(1, n / 2, up0(left), up0(right)),
+                              f(1, m, up1(left), up1(right)));
             }
+            memo_.emplace(key, ret);
+            return ret;
         }
-        boundary[s] = t;
+
+        int s = 0;
+        s = add_mod(s, mul_mod(f(l, m, up0(left), up0(right)), fib(l)));
+        s = add_mod(s, mul_mod(f(l, m, up0(left), up1(right)), fib(l - 1)));
+        s = add_mod(s, mul_mod(f(l, m, up1(left), up0(right)), fib(l - 1)));
+        s = add_mod(s, mul_mod(f(l, m, up1(left), up1(right)), fib(l - 2)));
+
+        const Edge up1o = up1(O());
+        for (int x = 1; x <= l - 1; ++x) {
+            int right_part = f(l - x, n, O(), right);
+            if (x > 1) {
+                int left_part = f(x, m, up0(left), up1o);
+                s = add_mod(s, mul_mod(mul_mod(left_part, right_part), fib(x - 1)));
+            }
+            int left_part2 = f(x, m, up1(left), up1o);
+            s = add_mod(s, mul_mod(mul_mod(left_part2, right_part), fib(x - 2)));
+        }
+
+        if ((n & 1) == 0) {
+            const Edge cn = C(n);
+            const Edge up0cn = up0(cn);
+
+            for (int x = 2; x <= l - 1; ++x) {
+                int right_part = f(l - x, n, cn, right);
+
+                int a = f(x - 1, m, up0(left), up0cn);
+                s = add_mod(s, mul_mod(mul_mod(a, right_part), fib(x)));
+
+                int b = f(x - 1, m, up1(left), up0cn);
+                s = add_mod(s, mul_mod(mul_mod(b, right_part), fib(x - 1)));
+            }
+
+            s = add_mod(s, f(l - 1, n, insert_edge(n, left), right));
+
+            const Edge ins_right = insert_edge(n, right);
+            s = add_mod(s, mul_mod(f(l - 1, m, up0(left), up0(ins_right)), fib(l)));
+            s = add_mod(s, mul_mod(f(l - 1, m, up1(left), up0(ins_right)), fib(l - 1)));
+        }
+
+        ret = s;
+        memo_.emplace(key, ret);
+        return ret;
     }
-    vector<uint32_t> prefix_mask(m + 1, 0);
-    for (int t = 1; t <= m; ++t) prefix_mask[t] = prefix_mask[t - 1] | (1u << (t - 1));
+};
 
-    vector<uint32_t> prefix_by_s(S, 0);
-    vector<int> comp_s(S, 0);
-    int full_mask = S - 1;
-    for (int s = 0; s < S; ++s) {
-        prefix_by_s[s] = prefix_mask[boundary[s]];
-        comp_s[s] = full_mask ^ s;
-    }
-
-    vector<vector<int>> E(m);
-    int max_dim = 1;
-    for (int i = 0; i < m; ++i) {
-        int di = dims[i];
-        max_dim = max(max_dim, di);
-        E[i].assign(di * di, 0);
-        for (int a = 0; a < di; ++a) {
-            for (int b = 0; b < di; ++b) {
-                if (seg[i] - a >= b) E[i][a * di + b] = comb(seg[i] - a, b);
-            }
-        }
-    }
-
-    size_t total_size = static_cast<size_t>(S) * static_cast<size_t>(P);
-    vector<int> f(total_size, 0);
-    vector<int> g(total_size, 0);
-
-    unsigned hw = thread::hardware_concurrency();
-    int threads = hw == 0 ? 1 : static_cast<int>(hw);
-    if (total_size < 1'000'000) threads = 1;
-
-    auto parallel_for = [&](int start, int end, int pieces, const auto& fn) {
-        if (pieces <= 1 || end - start <= 1) {
-            fn(0, start, end);
-            return;
-        }
-        int total = end - start;
-        int chunk = (total + pieces - 1) / pieces;
-        vector<thread> workers;
-        for (int t = 0; t < pieces; ++t) {
-            int s = start + t * chunk;
-            int e = min(end, s + chunk);
-            if (s >= e) break;
-            workers.emplace_back([=, &fn]() { fn(t, s, e); });
-        }
-        for (auto& th : workers) th.join();
-    };
-
-    parallel_for(0, S, threads, [&](int, int s_begin, int s_end) {
-        for (int s = s_begin; s < s_end; ++s) {
-            uint32_t pref = prefix_by_s[s];
-            size_t base = static_cast<size_t>(s) * P;
-            for (int c = 0; c < P; ++c) {
-                if ((nz_mask[c] & pref) != 0u) continue;
-                if (s == 0 && c == 0) continue;
-                f[base + c] = 1;
-            }
-        }
-    });
-
-    auto zeta_transform = [&](vector<int>& data) {
-        for (int bit = 0; bit < m; ++bit) {
-            int step = 1 << bit;
-            int block = step << 1;
-            parallel_for(0, P, threads, [&](int, int c_begin, int c_end) {
-                for (int s0 = 0; s0 < S; s0 += block) {
-                    for (int k = 0; k < step; ++k) {
-                        size_t idx1 = static_cast<size_t>(s0 + k) * P + c_begin;
-                        size_t idx2 = static_cast<size_t>(s0 + k + step) * P + c_begin;
-                        for (int c = c_begin; c < c_end; ++c) {
-                            int v = data[idx2 + (c - c_begin)] + data[idx1 + (c - c_begin)];
-                            if (v >= MOD) v -= MOD;
-                            data[idx2 + (c - c_begin)] = v;
-                        }
-                    }
-                }
-            });
-        }
-    };
-
-    auto apply_E_transform = [&](vector<int>& data) {
-        parallel_for(0, S, threads, [&](int, int s_begin, int s_end) {
-            vector<int> tmp(max_dim, 0);
-            for (int s = s_begin; s < s_end; ++s) {
-                size_t base = static_cast<size_t>(s) * P;
-                for (int i = 0; i < m; ++i) {
-                    int di = dims[i];
-                    if (di == 1) continue;
-                    int step = stride[i];
-                    int block = step * di;
-                    const int* mat = E[i].data();
-                    for (int start = 0; start < P; start += block) {
-                        for (int off = 0; off < step; ++off) {
-                            for (int k = 0; k < di; ++k) {
-                                tmp[k] = data[base + start + off + k * step];
-                            }
-                            for (int a = 0; a < di; ++a) {
-                                long long sum = 0;
-                                const int* row = mat + a * di;
-                                for (int b = 0; b < di; ++b) {
-                                    sum += 1LL * row[b] * tmp[b];
-                                }
-                                data[base + start + off + a * step] = static_cast<int>(sum % MOD);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    };
-
-    auto total_weight = [&](const vector<int>& data) -> int {
-        vector<long long> partial(threads, 0);
-        parallel_for(0, S, threads, [&](int tid, int s_begin, int s_end) {
-            long long sum = 0;
-            for (int s = s_begin; s < s_end; ++s) {
-                size_t base = static_cast<size_t>(s) * P;
-                for (int c = 0; c < P; ++c) {
-                    if (data[base + c] == 0) continue;
-                    sum += 1LL * data[base + c] * size_c[c];
-                    if (sum >= (1LL << 62)) sum %= MOD;
-                }
-            }
-            partial[tid] = sum % MOD;
-        });
-        long long sum = 0;
-        for (long long v : partial) {
-            sum += v;
-            if (sum >= (1LL << 62)) sum %= MOD;
-        }
-        return static_cast<int>(sum % MOD);
-    };
-
-    auto build_next = [&](int total, const vector<int>& src, vector<int>& dst) {
-        parallel_for(0, S, threads, [&](int, int s_begin, int s_end) {
-            for (int s = s_begin; s < s_end; ++s) {
-                size_t base = static_cast<size_t>(s) * P;
-                size_t base_comp = static_cast<size_t>(comp_s[s]) * P;
-                uint32_t pref = prefix_by_s[s];
-                for (int c = 0; c < P; ++c) {
-                    if ((nz_mask[c] & pref) != 0u || (s == 0 && c == 0)) {
-                        dst[base + c] = 0;
-                        continue;
-                    }
-                    dst[base + c] = sub_mod(total, src[base_comp + c]);
-                }
-            }
-        });
-    };
-
-    for (int step = 0; step < n - 1; ++step) {
-        int total = total_weight(f);
-        zeta_transform(f);
-        apply_E_transform(f);
-        build_next(total, f, g);
-        f.swap(g);
-    }
-
-    return total_weight(f);
+int compute_c(int n, int b) {
+    Solver774 solver(n, n, b);
+    return solver.solve();
 }
 
 }  // namespace
@@ -287,7 +221,7 @@ int compute_c(int n, uint64_t b) {
 int main() {
     struct Check {
         int n;
-        uint64_t b;
+        std::uint64_t b;
         int expected;
     };
 
@@ -298,14 +232,14 @@ int main() {
     };
 
     for (const auto& chk : checks) {
-        int got = compute_c(chk.n, chk.b);
+        int got = compute_c(chk.n, static_cast<int>(chk.b));
         if (got != chk.expected) {
-            cerr << "Validation failure: c(" << chk.n << ", " << chk.b
-                 << ") = " << got << ", expected " << chk.expected << '\n';
+            std::cerr << "Validation failure: c(" << chk.n << ", " << chk.b
+                      << ") = " << got << ", expected " << chk.expected << '\n';
             return 1;
         }
     }
 
-    cout << compute_c(123, 123456789ULL) << '\n';
+    std::cout << compute_c(123, 123456789) << '\n';
     return 0;
 }

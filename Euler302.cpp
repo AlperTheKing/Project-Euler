@@ -1,325 +1,261 @@
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
-#include <numeric>
-#include <string>
-#include <thread>
-#include <utility>
-#include <vector>
 
 namespace {
 
 using u64 = std::uint64_t;
-using u128 = unsigned __int128;
 
-struct Options {
-    u64 limit = 1000000000000000000ULL;
-    unsigned threads = std::thread::hardware_concurrency();
-    bool run_checkpoints = true;
-};
+constexpr int kPrimeSieveN = 6 * 105000;
+int prime_count = 0;
+int primes[kPrimeSieveN / 4];
+unsigned char erat[kPrimeSieveN + 1];
 
-bool parse_u64_after_prefix(const std::string& arg, const std::string& prefix, u64& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
-    }
-    const std::string tail = arg.substr(prefix.size());
-    if (tail.empty()) {
-        return false;
-    }
+int divisors[kPrimeSieveN + 1][24];
+unsigned char divisors_count[kPrimeSieveN + 1];
 
-    u64 parsed = 0;
-    for (char c : tail) {
-        if (c < '0' || c > '9') {
-            return false;
-        }
-        parsed = parsed * 10 + static_cast<u64>(c - '0');
-    }
-    value = parsed;
-    return true;
-}
+u64 answer = 0;
 
-bool parse_unsigned_after_prefix(const std::string& arg, const std::string& prefix, unsigned& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
+int gcd_small(int a, int b) {
+    while (b != 0) {
+        const int c = a % b;
+        a = b;
+        b = c;
     }
-    const std::string tail = arg.substr(prefix.size());
-    if (tail.empty()) {
-        return false;
-    }
-
-    unsigned parsed = 0;
-    for (char c : tail) {
-        if (c < '0' || c > '9') {
-            return false;
-        }
-        parsed = parsed * 10U + static_cast<unsigned>(c - '0');
-    }
-    value = parsed;
-    return true;
-}
-
-bool parse_arguments(int argc, char** argv, Options& options) {
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg(argv[i]);
-        if (arg == "--skip-checkpoints") {
-            options.run_checkpoints = false;
-            continue;
-        }
-        if (parse_u64_after_prefix(arg, "--limit=", options.limit)) {
-            continue;
-        }
-        if (parse_unsigned_after_prefix(arg, "--threads=", options.threads)) {
-            continue;
-        }
-        std::cerr << "Unknown argument: " << arg << '\n';
-        return false;
-    }
-    if (options.limit < 2) {
-        return false;
-    }
-    if (options.threads == 0) {
-        options.threads = 1;
-    }
-    return true;
+    return a;
 }
 
 int cube_root_floor(const u64 n) {
-    long double x = std::cbrt(static_cast<long double>(n));
-    u64 r = static_cast<u64>(x);
-    while ((static_cast<u128>(r + 1) * (r + 1) * (r + 1)) <= n) {
-        ++r;
+    if (n <= 1ULL) {
+        return static_cast<int>(n);
     }
-    while ((static_cast<u128>(r) * r * r) > n) {
-        --r;
-    }
-    return static_cast<int>(r);
+    int r = static_cast<int>(std::pow(static_cast<long double>(n), 1.0L / 3.0L));
+    while (static_cast<u64>(r + 1) * static_cast<u64>(r + 1) * static_cast<u64>(r + 1) <= n) ++r;
+    while (static_cast<u64>(r) * static_cast<u64>(r) * static_cast<u64>(r) > n) --r;
+    return r;
 }
 
-struct PrimeData {
-    std::vector<int> primes;
-    std::vector<int> spf;
-    std::vector<std::vector<std::pair<int, int>>> pminus1_fact;
-};
+void count_recursive(const int max_prime_idx,
+                     const int* active_factors,
+                     const int active_count,
+                     int gcd_exp_n,
+                     int gcd_exp_phi,
+                     const u64 lim) {
+    if (lim == 0ULL) {
+        return;
+    }
 
-PrimeData build_prime_data(const int pmax) {
-    PrimeData data;
-    data.spf.assign(static_cast<std::size_t>(pmax + 1), 0);
-
-    for (int i = 2; i <= pmax; ++i) {
-        if (data.spf[static_cast<std::size_t>(i)] != 0) {
-            continue;
-        }
-        data.spf[static_cast<std::size_t>(i)] = i;
-        data.primes.push_back(i);
-        if (static_cast<u64>(i) * i > static_cast<u64>(pmax)) {
-            continue;
-        }
-        for (int j = i * i; j <= pmax; j += i) {
-            if (data.spf[static_cast<std::size_t>(j)] == 0) {
-                data.spf[static_cast<std::size_t>(j)] = i;
+    if (gcd_exp_n == 1) {
+        int g = gcd_exp_phi;
+        int i = 0;
+        while (i < active_count) {
+            int j = i + 1;
+            while (j < active_count && active_factors[j] == active_factors[i]) ++j;
+            const int cnt = j - i;
+            if (cnt < 2) {
+                g = 0;
+                break;
             }
+            g = gcd_small(g, cnt);
+            i = j;
         }
-    }
-
-    data.pminus1_fact.resize(data.primes.size());
-
-    for (std::size_t idx = 0; idx < data.primes.size(); ++idx) {
-        int x = data.primes[idx] - 1;
-        auto& out = data.pminus1_fact[idx];
-        while (x > 1) {
-            const int p = data.spf[static_cast<std::size_t>(x)];
-            int e = 0;
-            while (x % p == 0) {
-                x /= p;
-                ++e;
-            }
-            out.push_back({p, e});
-        }
-    }
-
-    return data;
-}
-
-struct Worker {
-    const PrimeData& data;
-    u64 limit;
-
-    std::vector<int> phi_exp;
-    std::vector<int> active;
-    u64 answer = 0;
-
-    explicit Worker(const PrimeData& d, const u64 lim)
-        : data(d), limit(lim), phi_exp(static_cast<std::size_t>(d.spf.size()), 0) {
-        active.reserve(128);
-    }
-
-    inline void add_exp(const int p, const int delta, std::vector<std::pair<int, int>>& mods) {
-        if (phi_exp[static_cast<std::size_t>(p)] == 0) {
-            active.push_back(p);
-        }
-        phi_exp[static_cast<std::size_t>(p)] += delta;
-        mods.push_back({p, delta});
-    }
-
-    inline void undo_mods(const std::vector<std::pair<int, int>>& mods) {
-        for (auto it = mods.rbegin(); it != mods.rend(); ++it) {
-            phi_exp[static_cast<std::size_t>(it->first)] -= it->second;
-        }
-        while (!active.empty() && phi_exp[static_cast<std::size_t>(active.back())] == 0) {
-            active.pop_back();
-        }
-    }
-
-    bool phi_is_achilles() const {
-        int g = 0;
-        bool any = false;
-        for (int p : active) {
-            const int e = phi_exp[static_cast<std::size_t>(p)];
-            if (e == 0) {
-                continue;
-            }
-            any = true;
-            if (e < 2) {
-                return false;
-            }
-            g = (g == 0) ? e : std::gcd(g, e);
-        }
-        return any && g == 1;
-    }
-
-    void dfs(const int start_idx, const u128 n_cur, const int gcd_exp, const int factor_count) {
-        if (factor_count >= 2 && gcd_exp == 1 && phi_is_achilles()) {
+        if (g == 1) {
             ++answer;
         }
-
-        for (int i = start_idx; i < static_cast<int>(data.primes.size()); ++i) {
-            const int p = data.primes[static_cast<std::size_t>(i)];
-            if (static_cast<u128>(p) * p > static_cast<u128>(limit) / n_cur) {
-                break;
-            }
-
-            u128 n_next = n_cur;
-            int e = 0;
-            while (n_next <= static_cast<u128>(limit) / p) {
-                n_next *= p;
-                ++e;
-                if (e < 2) {
-                    continue;
-                }
-
-                std::vector<std::pair<int, int>> mods;
-                mods.reserve(8);
-
-                add_exp(p, e - 1, mods);
-                for (const auto& [q, qe] : data.pminus1_fact[static_cast<std::size_t>(i)]) {
-                    add_exp(q, qe, mods);
-                }
-
-                const int gcd_next = (factor_count == 0) ? e : std::gcd(gcd_exp, e);
-                dfs(i + 1, n_next, gcd_next, factor_count + 1);
-
-                undo_mods(mods);
-            }
-        }
     }
 
-    void run_root_index(const int i) {
-        const int p = data.primes[static_cast<std::size_t>(i)];
-
-        u128 n_next = 1;
-        int e = 0;
-        while (n_next <= static_cast<u128>(limit) / p) {
-            n_next *= p;
-            ++e;
-            if (e < 2) {
-                continue;
-            }
-
-            std::vector<std::pair<int, int>> mods;
-            mods.reserve(8);
-            add_exp(p, e - 1, mods);
-            for (const auto& [q, qe] : data.pminus1_fact[static_cast<std::size_t>(i)]) {
-                add_exp(q, qe, mods);
-            }
-
-            dfs(i + 1, n_next, e, 1);
-            undo_mods(mods);
-        }
-    }
-};
-
-u64 count_strong_achilles(const u64 limit, unsigned threads) {
-    const int pmax = cube_root_floor(limit);
-    const PrimeData data = build_prime_data(pmax);
-
-    if (threads <= 1 || data.primes.size() < 1000) {
-        Worker worker(data, limit);
-        for (int i = 0; i < static_cast<int>(data.primes.size()); ++i) {
-            const int p = data.primes[static_cast<std::size_t>(i)];
-            if (static_cast<u128>(p) * p > limit) {
-                break;
-            }
-            worker.run_root_index(i);
-        }
-        return worker.answer;
-    }
-
-    const unsigned use_threads = std::min<unsigned>(threads, static_cast<unsigned>(data.primes.size()));
-    std::vector<std::thread> pool;
-    std::vector<u64> partial(use_threads, 0);
-    pool.reserve(use_threads);
-
-    for (unsigned t = 0; t < use_threads; ++t) {
-        pool.emplace_back([&, t]() {
-            Worker worker(data, limit);
-            for (int i = static_cast<int>(t); i < static_cast<int>(data.primes.size()); i += static_cast<int>(use_threads)) {
-                const int p = data.primes[static_cast<std::size_t>(i)];
-                if (static_cast<u128>(p) * p > limit) {
+    int min_idx = 0;
+    if (active_count >= 2) {
+        if (active_factors[active_count - 1] != active_factors[active_count - 2]) {
+            min_idx = active_factors[active_count - 1];
+        } else {
+            for (int k = active_count - 2; k >= 1; --k) {
+                if (active_factors[k] != active_factors[k + 1] && active_factors[k] != active_factors[k - 1]) {
+                    min_idx = active_factors[k];
                     break;
                 }
-                worker.run_root_index(i);
             }
-            partial[static_cast<std::size_t>(t)] = worker.answer;
-        });
+        }
+    } else if (active_count == 1) {
+        min_idx = active_factors[0];
     }
 
-    for (auto& th : pool) {
-        th.join();
+    int max_idx = cube_root_floor(lim);
+    if (primes[max_prime_idx - 1] > max_idx) {
+        int a = 0;
+        int b = prime_count - 1;
+        while (a < b - 1) {
+            const int c = (a + b) / 2;
+            if (primes[c] > max_idx) {
+                b = c;
+            } else {
+                a = c;
+            }
+        }
+        max_idx = a;
+    }
+    if (max_idx > max_prime_idx - 1) {
+        max_idx = max_prime_idx - 1;
     }
 
-    u64 total = 0;
-    for (u64 v : partial) {
-        total += v;
+    int merged[70];
+    for (int j = active_count - 1; j >= 0;) {
+        int overdeg = 0;
+        for (int y = j; y >= 0 && active_factors[y] == active_factors[j]; --y) ++overdeg;
+
+        if (active_factors[j] < max_prime_idx) {
+            int k1 = 0;
+            int k2 = 0;
+            int merged_count = 0;
+            const int idx = active_factors[j];
+            const int p_minus_one = primes[idx] - 1;
+            const int div_cnt = divisors_count[p_minus_one];
+
+            while (k1 < active_count && k2 < div_cnt) {
+                if (active_factors[k1] < divisors[p_minus_one][k2]) {
+                    merged[merged_count++] = active_factors[k1++];
+                } else {
+                    merged[merged_count++] = divisors[p_minus_one][k2++];
+                }
+            }
+            while (k2 < div_cnt) merged[merged_count++] = divisors[p_minus_one][k2++];
+            while (k1 < active_count) merged[merged_count++] = active_factors[k1++];
+
+            int g2 = gcd_exp_phi;
+            while (merged_count > 0 && merged[merged_count - 1] > active_factors[j]) {
+                int y = merged_count - 1;
+                while (y >= 0 && merged[y] == merged[merged_count - 1]) --y;
+                g2 = gcd_small(g2, merged_count - y - 1);
+                merged_count = y + 1;
+            }
+            if (merged_count > 0 && merged[merged_count - 1] == active_factors[j]) {
+                merged_count -= overdeg;
+            }
+
+            const u64 p = static_cast<u64>(primes[idx]);
+            u64 pow = p;
+            int deg = 2;
+            while (pow <= lim / p) {
+                const int new_g1 = gcd_small(gcd_exp_n, deg);
+                const int new_g2 = gcd_small(g2, deg - 1 + overdeg);
+                count_recursive(idx, merged, merged_count, new_g1, new_g2, lim / pow / p);
+
+                if (pow > (std::numeric_limits<u64>::max() / p)) break;
+                pow *= p;
+                ++deg;
+            }
+        }
+
+        j -= overdeg;
+        if (overdeg == 1) break;
     }
-    return total;
+
+    int now = 0;
+    while (now < active_count && active_factors[now] < min_idx) ++now;
+
+    for (int idx = min_idx; idx <= max_idx; ++idx) {
+        if (now < active_count && idx == active_factors[now]) {
+            while (now < active_count && active_factors[now] == idx) ++now;
+            continue;
+        }
+
+        int k1 = 0;
+        int k2 = 0;
+        int merged_count = 0;
+        const int p_minus_one = primes[idx] - 1;
+        const int div_cnt = divisors_count[p_minus_one];
+        while (k1 < active_count && k2 < div_cnt) {
+            if (active_factors[k1] < divisors[p_minus_one][k2]) {
+                merged[merged_count++] = active_factors[k1++];
+            } else {
+                merged[merged_count++] = divisors[p_minus_one][k2++];
+            }
+        }
+        while (k2 < div_cnt) merged[merged_count++] = divisors[p_minus_one][k2++];
+        while (k1 < active_count) merged[merged_count++] = active_factors[k1++];
+
+        int g2 = gcd_exp_phi;
+        while (merged_count > 0 && merged[merged_count - 1] > idx) {
+            int y = merged_count - 1;
+            while (y >= 0 && merged[y] == merged[merged_count - 1]) --y;
+            g2 = gcd_small(g2, merged_count - y - 1);
+            merged_count = y + 1;
+        }
+
+        const u64 p = static_cast<u64>(primes[idx]);
+        u64 pow = p * p;
+        int deg = 3;
+        while (pow <= lim / p) {
+            const int new_g1 = gcd_small(gcd_exp_n, deg);
+            const int new_g2 = gcd_small(g2, deg - 1);
+            count_recursive(idx, merged, merged_count, new_g1, new_g2, lim / pow / p);
+
+            if (pow > (std::numeric_limits<u64>::max() / p)) break;
+            pow *= p;
+            ++deg;
+        }
+    }
 }
 
-bool run_checkpoints() {
-    if (count_strong_achilles(10000ULL, 1) != 7ULL) {
-        std::cerr << "Checkpoint failed for 10^4" << '\n';
-        return false;
+void prepare_data() {
+    primes[0] = 2;
+    primes[1] = 3;
+    prime_count = 2;
+    erat[1] = 1;
+
+    const int sq = static_cast<int>(std::sqrt(static_cast<long double>(kPrimeSieveN)));
+    for (int i = 0; i <= sq; i += 6) {
+        if (erat[i + 1] == 0) {
+            const int p = i + 1;
+            const int step = p * 6;
+            for (int j = p * p; j <= kPrimeSieveN; j += step) erat[j] = 1;
+            for (int j = p * (p + 4); j <= kPrimeSieveN; j += step) erat[j] = 1;
+            primes[prime_count++] = p;
+        }
+        if (erat[i + 5] == 0) {
+            const int p = i + 5;
+            const int step = p * 6;
+            for (int j = p * p; j <= kPrimeSieveN; j += step) erat[j] = 1;
+            for (int j = p * (p + 2); j <= kPrimeSieveN; j += step) erat[j] = 1;
+            primes[prime_count++] = p;
+        }
     }
-    if (count_strong_achilles(100000000ULL, 1) != 656ULL) {
-        std::cerr << "Checkpoint failed for 10^8" << '\n';
-        return false;
+
+    const int start = sq - (sq % 6) + 6;
+    for (int i = start; i < kPrimeSieveN; i += 6) {
+        if (erat[i + 1] == 0) primes[prime_count++] = i + 1;
+        if (erat[i + 5] == 0) primes[prime_count++] = i + 5;
     }
-    return true;
+
+    for (int i = 0; i < prime_count; ++i) {
+        for (u64 deg = static_cast<u64>(primes[i]); deg <= static_cast<u64>(kPrimeSieveN);) {
+            for (int j = static_cast<int>(deg); j <= kPrimeSieveN; j += static_cast<int>(deg)) {
+                divisors[j][divisors_count[j]++] = i;
+            }
+            if (deg <= static_cast<u64>(kPrimeSieveN / primes[i])) {
+                deg *= static_cast<u64>(primes[i]);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+u64 solve(const u64 limit) {
+    answer = 0;
+    int root_factors[70] = {0};
+    count_recursive(prime_count, root_factors, 0, 0, 0, limit);
+    return answer;
 }
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    Options options;
-    if (!parse_arguments(argc, argv, options)) {
-        return 1;
-    }
-
-    if (options.run_checkpoints && !run_checkpoints()) {
-        return 2;
-    }
-
-    const u64 answer = count_strong_achilles(options.limit, options.threads);
-    std::cout << answer << '\n';
+int main() {
+    prepare_data();
+    assert(solve(10'000ULL) == 7ULL);
+    assert(solve(100'000'000ULL) == 656ULL);
+    std::cout << solve(1'000'000'000'000'000'000ULL) << '\n';
     return 0;
 }

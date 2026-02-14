@@ -1,429 +1,240 @@
 #include <algorithm>
-#include <atomic>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <string>
-#include <thread>
-#include <vector>
+#include <unordered_map>
 
 namespace {
 
-using i64 = std::int64_t;
-using u32 = std::uint32_t;
-using u64 = std::uint64_t;
+using i64 = long long;
+
+constexpr bool kClosed = true;
+constexpr bool kOpen = false;
 
 struct Options {
     int n = 100000;
-    i64 segment_size = 1000000;
-    unsigned requested_threads = 0U;
     bool run_checkpoints = true;
 };
 
-struct CEntry {
-    u32 key;
-    u32 c;
-};
-
-struct ABEntry {
-    u32 key;
-    u32 b;
-    u32 sum;
-};
-
-bool parse_int_after_prefix(const std::string& arg,
-                            const std::string& prefix,
-                            int& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
-    }
+bool parse_int_after_prefix(const std::string& arg, const std::string& prefix, int& value) {
+    if (arg.rfind(prefix, 0U) != 0U) return false;
     const std::string tail = arg.substr(prefix.size());
-    if (tail.empty()) {
-        return false;
-    }
+    if (tail.empty()) return false;
 
-    i64 parsed = 0;
+    unsigned long long parsed = 0ULL;
     for (char ch : tail) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        parsed = parsed * 10 + static_cast<i64>(ch - '0');
-        if (parsed > static_cast<i64>(std::numeric_limits<int>::max())) {
-            return false;
-        }
+        if (ch < '0' || ch > '9') return false;
+        const unsigned long long d = static_cast<unsigned long long>(ch - '0');
+        if (parsed > (std::numeric_limits<unsigned long long>::max() - d) / 10ULL) return false;
+        parsed = parsed * 10ULL + d;
     }
-
+    if (parsed > static_cast<unsigned long long>(std::numeric_limits<int>::max())) return false;
     value = static_cast<int>(parsed);
     return true;
 }
 
-bool parse_i64_after_prefix(const std::string& arg,
-                            const std::string& prefix,
-                            i64& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
-    }
-    const std::string tail = arg.substr(prefix.size());
-    if (tail.empty()) {
-        return false;
-    }
-
-    i64 parsed = 0;
-    for (char ch : tail) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        const int digit = ch - '0';
-        if (parsed > (std::numeric_limits<i64>::max() - digit) / 10) {
-            return false;
-        }
-        parsed = parsed * 10 + digit;
-    }
-
-    value = parsed;
-    return true;
-}
-
-bool parse_unsigned_after_prefix(const std::string& arg,
-                                 const std::string& prefix,
-                                 unsigned& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
-    }
-    const std::string tail = arg.substr(prefix.size());
-    if (tail.empty()) {
-        return false;
-    }
-
-    u64 parsed = 0ULL;
-    for (char ch : tail) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        const u64 digit = static_cast<u64>(ch - '0');
-        if (parsed > (std::numeric_limits<u64>::max() - digit) / 10ULL) {
-            return false;
-        }
-        parsed = parsed * 10ULL + digit;
-        if (parsed > static_cast<u64>(std::numeric_limits<unsigned>::max())) {
-            return false;
-        }
-    }
-
-    value = static_cast<unsigned>(parsed);
-    return true;
-}
-
-bool parse_arguments(const int argc, char** argv, Options& options) {
+bool parse_arguments(int argc, char** argv, Options& options) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-
         if (arg == "--skip-checkpoints") {
             options.run_checkpoints = false;
             continue;
         }
-        if (parse_int_after_prefix(arg, "--n=", options.n)) {
-            continue;
-        }
-        if (parse_i64_after_prefix(arg, "--segment=", options.segment_size)) {
-            continue;
-        }
-        if (parse_unsigned_after_prefix(arg, "--threads=", options.requested_threads)) {
-            continue;
-        }
-
+        if (parse_int_after_prefix(arg, "--n=", options.n)) continue;
         std::cerr << "Unknown argument: " << arg << '\n';
         return false;
     }
-
-    if (options.n < 1) {
-        std::cerr << "--n must be >= 1\n";
-        return false;
-    }
-    if (options.segment_size < 1) {
-        std::cerr << "--segment must be >= 1\n";
-        return false;
-    }
-
-    return true;
+    return options.n >= 1;
 }
 
-unsigned pick_thread_count(const unsigned requested) {
-    if (requested > 0U) {
-        return requested;
-    }
-    unsigned hw = std::thread::hardware_concurrency();
-    if (hw == 0U) {
-        hw = 4U;
-    }
-    return hw;
+inline i64 floor_div(i64 a, i64 b) {
+    assert(b > 0);
+    if (a >= 0) return a / b;
+    return -((-a + b - 1) / b);
 }
 
-i64 isqrt_floor(const i64 x) {
-    i64 r = static_cast<i64>(std::sqrt(static_cast<long double>(x)));
-    while ((r + 1) * (r + 1) <= x) {
-        ++r;
-    }
-    while (r * r > x) {
-        --r;
-    }
+i64 isqrt_floor(i64 n) {
+    i64 r = static_cast<i64>(std::sqrt(static_cast<long double>(n)));
+    while ((r + 1) * (r + 1) <= n) ++r;
+    while (r * r > n) --r;
     return r;
 }
 
-struct Solver {
-    int n = 1;
-    int m = 0;
-    i64 max_n = 0;
-    i64 segment_size = 1;
-
-    u64 solve_segment(const i64 L,
-                      const i64 R,
-                      std::vector<CEntry>& c_entries,
-                      std::vector<ABEntry>& ab_entries) const {
-        c_entries.clear();
-        ab_entries.clear();
-
-        for (int x = 1; x <= m; ++x) {
-            const i64 xx = 1LL * x * x;
-            if (xx + xx > R) {
-                break;
-            }
-
-            const i64 lo = (L + 1) - xx;
-            int t_min = x;
-            if (lo > 0) {
-                i64 r = isqrt_floor(lo);
-                if (r * r < lo) {
-                    ++r;
+i64 points_in_trapezoid(i64 slope,
+                        i64 intercept,
+                        i64 denominator,
+                        i64 lower_domain,
+                        i64 upper_domain,
+                        bool boundary) {
+    i64 result = 0;
+    while (true) {
+        assert(denominator > 0);
+        if (std::llabs(upper_domain - lower_domain) <= 8) {
+            i64 s = 0;
+            const i64 adjustment = boundary ? 0 : 1;
+            if (upper_domain > lower_domain) {
+                for (i64 x = lower_domain + 1; x <= upper_domain; ++x) {
+                    s += floor_div(slope * x + intercept - adjustment, denominator);
                 }
-                if (r > t_min) {
-                    t_min = static_cast<int>(r);
+            } else {
+                for (i64 x = upper_domain + 1; x <= lower_domain; ++x) {
+                    s += floor_div(slope * x + intercept - adjustment, denominator);
                 }
+                s = -s;
             }
-
-            const i64 hi = R - xx;
-            if (hi < 1LL * t_min * t_min) {
-                continue;
-            }
-            const int t_max = static_cast<int>(isqrt_floor(hi));
-            if (t_max < t_min) {
-                continue;
-            }
-
-            for (int t = t_min; t <= t_max; ++t) {
-                const i64 n_value = xx + 1LL * t * t;
-                const u32 key = static_cast<u32>(n_value - L);
-                c_entries.push_back({key, static_cast<u32>(x)});
-                if (t != x && t <= m) {
-                    c_entries.push_back({key, static_cast<u32>(t)});
-                }
-            }
+            result += s;
+            break;
         }
 
-        const i64 sum_lo = 2LL * L + 2;
-        const i64 sum_hi = 2LL * R;
-        for (int a = 1; a <= n; ++a) {
-            const i64 aa = 1LL * a * a;
-            if (aa + aa > sum_hi) {
-                break;
-            }
+        result += (upper_domain - lower_domain) * floor_div(intercept, denominator);
+        intercept = ((intercept % denominator) + denominator) % denominator;
+        result += ((upper_domain - lower_domain) * (upper_domain + lower_domain + 1) / 2) *
+                  floor_div(slope, denominator);
+        slope = ((slope % denominator) + denominator) % denominator;
 
-            const i64 lo = sum_lo - aa;
-            int b_min = a;
-            if (lo > 0) {
-                i64 r = isqrt_floor(lo);
-                if (r * r < lo) {
-                    ++r;
-                }
-                if (r > b_min) {
-                    b_min = static_cast<int>(r);
-                }
-            }
-            if ((b_min & 1) != (a & 1)) {
-                ++b_min;
-            }
-
-            const i64 hi = sum_hi - aa;
-            if (hi < 1LL * b_min * b_min) {
-                continue;
-            }
-            int b_max = static_cast<int>(isqrt_floor(hi));
-            if (b_max > n) {
-                b_max = n;
-            }
-            if (b_max < b_min) {
-                continue;
-            }
-
-            for (int b = b_min; b <= b_max; b += 2) {
-                const i64 s = aa + 1LL * b * b;
-                if (s & 1LL) {
-                    continue;
-                }
-                const i64 n_value = s / 2LL;
-                if (n_value <= L || n_value > R) {
-                    continue;
-                }
-                const u32 key = static_cast<u32>(n_value - L);
-                ab_entries.push_back(
-                    {key, static_cast<u32>(b), static_cast<u32>(a + b)});
-            }
+        if (slope != 0) {
+            const i64 upper_value = floor_div(slope * upper_domain + intercept, denominator);
+            const i64 lower_value = floor_div(slope * lower_domain + intercept, denominator);
+            result += upper_domain * upper_value - lower_domain * lower_value;
+            lower_domain = upper_value;
+            upper_domain = lower_value;
+            std::swap(slope, denominator);
+            intercept = -intercept;
+            boundary = !boundary;
+        } else {
+            if (intercept == 0 && !boundary) result -= upper_domain - lower_domain;
+            break;
         }
-
-        std::sort(c_entries.begin(), c_entries.end(),
-                  [](const CEntry& lhs, const CEntry& rhs) {
-                      if (lhs.key != rhs.key) {
-                          return lhs.key < rhs.key;
-                      }
-                      return lhs.c < rhs.c;
-                  });
-
-        std::sort(ab_entries.begin(), ab_entries.end(),
-                  [](const ABEntry& lhs, const ABEntry& rhs) {
-                      if (lhs.key != rhs.key) {
-                          return lhs.key < rhs.key;
-                      }
-                      if (lhs.b != rhs.b) {
-                          return lhs.b < rhs.b;
-                      }
-                      return lhs.sum < rhs.sum;
-                  });
-
-        u64 segment_answer = 0ULL;
-        std::size_t i = 0U;
-        std::size_t j = 0U;
-
-        while (i < c_entries.size() && j < ab_entries.size()) {
-            if (c_entries[i].key < ab_entries[j].key) {
-                const u32 key = c_entries[i].key;
-                while (i < c_entries.size() && c_entries[i].key == key) {
-                    ++i;
-                }
-                continue;
-            }
-            if (ab_entries[j].key < c_entries[i].key) {
-                const u32 key = ab_entries[j].key;
-                while (j < ab_entries.size() && ab_entries[j].key == key) {
-                    ++j;
-                }
-                continue;
-            }
-
-            const u32 key = c_entries[i].key;
-            const std::size_t i_begin = i;
-            while (i < c_entries.size() && c_entries[i].key == key) {
-                ++i;
-            }
-            const std::size_t i_end = i;
-
-            const std::size_t j_begin = j;
-            while (j < ab_entries.size() && ab_entries[j].key == key) {
-                ++j;
-            }
-            const std::size_t j_end = j;
-
-            for (std::size_t idx = j_begin; idx < j_end; ++idx) {
-                const int lo_c = (static_cast<int>(ab_entries[idx].b) + 1) / 2;
-                const int hi_c = (static_cast<int>(ab_entries[idx].sum) - 1) / 2;
-                if (lo_c > hi_c) {
-                    continue;
-                }
-
-                const auto lower = std::lower_bound(
-                    c_entries.begin() + static_cast<std::ptrdiff_t>(i_begin),
-                    c_entries.begin() + static_cast<std::ptrdiff_t>(i_end),
-                    static_cast<u32>(lo_c),
-                    [](const CEntry& entry, const u32 value) {
-                        return entry.c < value;
-                    });
-                const auto upper = std::upper_bound(
-                    c_entries.begin() + static_cast<std::ptrdiff_t>(i_begin),
-                    c_entries.begin() + static_cast<std::ptrdiff_t>(i_end),
-                    static_cast<u32>(hi_c),
-                    [](const u32 value, const CEntry& entry) {
-                        return value < entry.c;
-                    });
-
-                segment_answer += static_cast<u64>(upper - lower);
-            }
-        }
-
-        return segment_answer;
     }
-
-    u64 solve(const unsigned thread_count) const {
-        const i64 segment_count = (max_n + segment_size - 1) / segment_size;
-        std::atomic<i64> next_segment(0);
-
-        std::vector<u64> partial(thread_count, 0ULL);
-        std::vector<std::thread> pool;
-        pool.reserve(thread_count);
-
-        for (unsigned t = 0U; t < thread_count; ++t) {
-            pool.emplace_back([&, t]() {
-                std::vector<CEntry> c_entries;
-                std::vector<ABEntry> ab_entries;
-                c_entries.reserve(1U << 20U);
-                ab_entries.reserve(1U << 20U);
-
-                u64 local = 0ULL;
-                while (true) {
-                    const i64 idx = next_segment.fetch_add(1, std::memory_order_relaxed);
-                    if (idx >= segment_count) {
-                        break;
-                    }
-
-                    const i64 L = idx * segment_size;
-                    const i64 R = std::min(max_n, L + segment_size);
-                    local += solve_segment(L, R, c_entries, ab_entries);
-                }
-
-                partial[t] = local;
-            });
-        }
-
-        for (std::thread& th : pool) {
-            th.join();
-        }
-
-        u64 answer = 0ULL;
-        for (u64 value : partial) {
-            answer += value;
-        }
-        return answer;
-    }
-};
-
-u64 compute_f(const int n, const i64 segment_size, const unsigned thread_count) {
-    const int m = n / 2;
-    Solver solver{n, m, 4LL * m * m, segment_size};
-    return solver.solve(thread_count);
+    return result;
 }
 
-bool run_checkpoints(const i64 segment_size, const unsigned thread_count) {
-    struct Checkpoint {
-        int n;
-        u64 expected;
-    };
+i64 points_in_trapezoid_mod2(i64 slope,
+                             i64 intercept,
+                             i64 denominator,
+                             i64 lower_domain,
+                             i64 upper_domain,
+                             bool boundary,
+                             i64 x_residue,
+                             i64 y_residue) {
+    if ((y_residue & 1LL) != 0) intercept += denominator;
+    if ((x_residue & 1LL) != 0) {
+        intercept -= slope;
+        ++lower_domain;
+        ++upper_domain;
+    }
+    return points_in_trapezoid(2 * slope, intercept, 2 * denominator,
+                               floor_div(lower_domain, 2), floor_div(upper_domain, 2), boundary);
+}
 
-    const Checkpoint checkpoints[] = {
-        {10, 3ULL},
-        {50, 165ULL},
-    };
+i64 f_value(i64 n) {
+    i64 result = 0;
+    const i64 three_halves_n = n + n / 2;
+    const i64 root = isqrt_floor(three_halves_n);
+    const int ij[3][2] = {{0, 1}, {1, 0}, {1, 1}};
 
-    for (const Checkpoint& checkpoint : checkpoints) {
-        const u64 got = compute_f(checkpoint.n, segment_size, thread_count);
-        if (got != checkpoint.expected) {
-            std::cerr << "Validation failed for n=" << checkpoint.n
-                      << ": got " << got
-                      << ", expected " << checkpoint.expected << '\n';
-            return false;
+    for (int tc = 0; tc < 3; ++tc) {
+        const i64 i = ij[tc][0];
+        const i64 j = ij[tc][1];
+
+        i64 max_t = 1;
+        for (i64 s = 2; s < root; ++s) {
+            if (3 * (max_t + 1) * (max_t + 1) <= s * s) ++max_t;
+            if (i == j || (s & 1LL) == 0) {
+                for (i64 t = ((s - 1) & 1LL) + 1; t <= max_t; t += 2) {
+                    const i64 v_mid = t * n / ((s - t) * (s + t));
+                    const i64 v_max = n * (s + t) / (s * s + 2 * s * t - t * t);
+                    result += points_in_trapezoid_mod2(s, 0, t, 0, v_mid, kClosed, j, i);
+                    result += points_in_trapezoid_mod2(t, n, s, v_mid, v_max, kClosed, j, i);
+                    result -= points_in_trapezoid_mod2(s + 3 * t, 0, s + t, 0, v_max, kOpen, j, i);
+                }
+            }
+        }
+
+        const i64 u_max = three_halves_n / root;
+        for (i64 u = 1 + ((i + 1) & 1LL); u <= u_max; u += 2) {
+            const i64 v_max_outer = std::min(n / 2, u - 1);
+            for (i64 v = 1 + ((j + 1) & 1LL); v <= v_max_outer; v += 2) {
+                const i64 mid_s = (v + n) / u;
+                const int residue_count = (i == j ? 2 : 1);
+                for (int sr = 0; sr < residue_count; ++sr) {
+                    const i64 s_residue = (i == j ? sr : 0);
+
+                    i64 min_s = 0, max_s = -1;
+                    i64 slope0 = 0, slope1 = 1;
+                    if (u * u < 3 * v * v) {
+                        min_s = root;
+                        max_s = n * (3 * v - u) / (2 * u * v + v * v - u * u);
+                        slope0 = u - v;
+                        slope1 = 3 * v - u;
+                    } else {
+                        min_s = std::max(root, floor_div(u + v - 1, v));
+                        max_s = n * u / ((u - v) * (u + v));
+                        slope0 = v;
+                        slope1 = u;
+                    }
+
+                    if (max_s >= min_s) {
+                        result += points_in_trapezoid_mod2(slope0, 0, slope1,
+                                                           min_s - 1, max_s, kClosed,
+                                                           s_residue, s_residue);
+                        if (mid_s < max_s) {
+                            result -= points_in_trapezoid_mod2(u, -n, v,
+                                                               std::max(mid_s, min_s - 1), max_s,
+                                                               kOpen, s_residue, s_residue);
+                        }
+                    }
+                }
+            }
         }
     }
+    return result;
+}
 
-    std::cerr << "Validation checkpoints passed.\n";
+std::unordered_map<i64, i64> memo_F;
+
+i64 F(i64 n) {
+    if (n <= 0) return 0;
+    const auto it = memo_F.find(n);
+    if (it != memo_F.end()) return it->second;
+
+    i64 result = f_value(n);
+    i64 k = 3;
+    i64 n_over_k = n / k;
+    while (k <= n_over_k) {
+        result -= F(n_over_k);
+        k += 2;
+        n_over_k = n / k;
+    }
+
+    i64 min_k = n / (n_over_k + 1);
+    while (n_over_k) {
+        const i64 max_k = n / n_over_k;
+        const i64 left = (min_k + 1) + (min_k & 1LL);
+        const i64 right = max_k - ((max_k + 1) & 1LL);
+        i64 count = 0;
+        if (right >= left) count = (right - left) / 2 + 1;
+        result -= F(n_over_k) * count;
+        --n_over_k;
+        min_k = max_k;
+    }
+
+    memo_F.emplace(n, result);
+    return result;
+}
+
+bool run_checkpoints() {
+    if (F(10) != 3) {
+        std::cerr << "Validation failed: F(10)\n";
+        return false;
+    }
+    if (F(50) != 165) {
+        std::cerr << "Validation failed: F(50)\n";
+        return false;
+    }
     return true;
 }
 
@@ -435,12 +246,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const unsigned threads = pick_thread_count(options.requested_threads);
-    if (options.run_checkpoints &&
-        !run_checkpoints(options.segment_size, std::min(threads, 4U))) {
+    memo_F.reserve(1 << 15);
+    if (options.run_checkpoints && !run_checkpoints()) {
         return 1;
     }
 
-    std::cout << compute_f(options.n, options.segment_size, threads) << '\n';
+    std::cout << F(options.n) << '\n';
     return 0;
 }

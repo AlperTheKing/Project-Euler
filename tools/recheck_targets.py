@@ -17,9 +17,24 @@ LINE_RE = re.compile(r"^(\d+)\.\s*(.+?)\s*$")
 INT_RE = re.compile(r"^[+-]?\d+$")
 FRAC_RE = re.compile(r"^[+-]?\d+/[1-9]\d*$")
 HEX_SPECIAL_RE = re.compile(r"^[0-9A-Fa-f]+(?:,[0-9A-Fa-f]+)*$")
-TAIL_FRAC_RE = re.compile(r"([+-]?\d+/[1-9]\d*)\s*$")
-TAIL_NUM_RE = re.compile(r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$")
-TAIL_TEXT_RE = re.compile(r"([A-Za-z]+)\s*$")
+NUM_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+TEXT_RE = re.compile(r"^[A-Za-z]+$")
+
+NOISE_KEYWORDS = (
+    "elapsed",
+    "checkpoint",
+    "pass",
+    "fail",
+    "validation",
+    "test passed",
+    "calculating",
+    "build warning",
+    "using",
+    "scheduler",
+    "probability mass",
+    "states in canonical graph",
+    "time:",
+)
 
 
 def fetch_expected() -> dict[int, str]:
@@ -33,26 +48,52 @@ def fetch_expected() -> dict[int, str]:
     return out
 
 
+def is_atom(token: str) -> bool:
+    return (
+        FRAC_RE.fullmatch(token) is not None
+        or NUM_RE.fullmatch(token) is not None
+        or HEX_SPECIAL_RE.fullmatch(token) is not None
+        or TEXT_RE.fullmatch(token) is not None
+    )
+
+
+def normalize_candidate(token: str) -> str:
+    token = token.strip().strip("()[]{}")
+    if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+        token = token[1:-1]
+    return token.strip()
+
+
 def parse_stdout(stdout: str) -> str | None:
     lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
     for line in reversed(lines):
         low = line.lower()
-        if "elapsed" in low:
+        if any(k in low for k in NOISE_KEYWORDS) and "answer" not in low and "f(20!)" not in low:
             continue
-        segment = line
-        if "=" in segment:
-            segment = segment.rsplit("=", 1)[1].strip()
-        elif ":" in segment:
-            segment = segment.rsplit(":", 1)[1].strip()
-        m = TAIL_FRAC_RE.search(segment)
-        if m:
-            return m.group(1)
-        m = TAIL_NUM_RE.search(segment)
-        if m:
-            return m.group(1)
-        m = TAIL_TEXT_RE.search(segment)
-        if m:
-            return m.group(1)
+
+        segments = [line]
+        if "=" in line:
+            segments.append(line.rsplit("=", 1)[1].strip())
+        if ":" in line:
+            segments.append(line.rsplit(":", 1)[1].strip())
+
+        for segment in segments:
+            cand = normalize_candidate(segment)
+            if not cand:
+                continue
+
+            if is_atom(cand):
+                return cand
+
+            if "," in cand:
+                parts = [normalize_candidate(p) for p in cand.split(",")]
+                if all(parts) and all(is_atom(p) for p in parts):
+                    return ",".join(parts)
+
+            tokens = [normalize_candidate(t) for t in cand.split()]
+            for tok in reversed(tokens):
+                if tok and is_atom(tok):
+                    return tok
     return None
 
 

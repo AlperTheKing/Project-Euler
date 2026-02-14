@@ -1,242 +1,117 @@
-#include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <string>
-#include <thread>
-#include <vector>
+#include <unordered_map>
 
-using namespace std;
+namespace {
 
-struct Fenwick {
-    vector<int> tree;
-    int n = 0;
+using i64 = long long;
+using u64 = std::uint64_t;
+using u128 = unsigned __int128;
 
-    void reset(int size) {
-        n = size;
-        tree.assign(n + 1, 0);
-    }
+struct Key {
+    i64 x;
+    i64 m;
 
-    inline void add(int idx, int delta) {
-        for (int i = idx + 1; i <= n; i += i & -i) {
-            tree[i] += delta;
-        }
-    }
+    bool operator==(const Key& other) const noexcept { return x == other.x && m == other.m; }
+};
 
-    inline int sum_prefix(int idx) const {
-        int res = 0;
-        for (int i = idx + 1; i > 0; i -= i & -i) {
-            res += tree[i];
-        }
-        return res;
+struct KeyHash {
+    std::size_t operator()(const Key& k) const noexcept {
+        std::size_t h1 = std::hash<i64>{}(k.x);
+        std::size_t h2 = std::hash<i64>{}(k.m);
+        return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6U) + (h1 >> 2U));
     }
 };
 
-static int thread_count() {
-    unsigned int hc = thread::hardware_concurrency();
-    int t = hc == 0 ? 4 : static_cast<int>(hc);
-    return min(t, 8);
-}
+class Solver702 {
+  public:
+    i64 solve(i64 n) {
+        cache_.clear();
+        const int D = bit_length(n);
 
-static void build_pos_parallel(long long N, long long step, vector<int> &pos, int threads) {
-    if (threads <= 1 || N < 1'000'000) {
-        long long r = 0;
-        for (int i = 0; i < N; ++i) {
-            pos[static_cast<int>(r)] = i;
-            r += step;
-            if (r >= N) r -= N;
+        i64 ans = static_cast<i64>((static_cast<u128>(n) * (3 * static_cast<u128>(n) + 1) / 2) *
+                                   static_cast<u128>(D + 1));
+
+        for (int d = 2; d <= D; ++d) {
+            ans -= g(n, 1LL << d);
         }
-        return;
+        ans += 2 * g(n, (1LL << D) - n);
+        return ans;
     }
 
-    vector<thread> pool;
-    long long chunk = (N + threads - 1) / threads;
-    for (int t = 0; t < threads; ++t) {
-        long long start = t * chunk;
-        long long end = min(N, start + chunk);
-        pool.emplace_back([&, start, end]() {
-            for (long long i = start; i < end; ++i) {
-                long long r = (step * i) % N;
-                pos[static_cast<int>(r)] = static_cast<int>(i);
-            }
-        });
-    }
-    for (auto &th : pool) th.join();
-}
+  private:
+    std::unordered_map<Key, i64, KeyHash> cache_;
 
-static long long count_rect(long long N, int k) {
-    long long pow2 = 1LL << k;
-    long long T = 2 * N - pow2;
-    if (T < 0) return N * N;
-
-    if (T <= N - 1) {
-        long long a = N - T - 1;
-        long long sum_range = (T * (T + 1)) / 2 + (T + 1) * a;
-        long long count_high = N - 1 - T;
-        long long sum_high = count_high > 0 ? count_high * N : 0;
-        return sum_range + sum_high;
-    }
-
-    long long r0 = T - (N - 1);
-    if (r0 >= N - 1) return 0;
-    long long start = r0 + 1;
-    long long end = N - 1;
-    if (start > end) return 0;
-    long long a = T - N + 1;
-    long long count = end - start + 1;
-    long long sum_r = (start + end) * count / 2;
-    return sum_r - a * count;
-}
-
-static long long count_tri_subset(long long N, int k, const vector<int> &pos, vector<int> &d_of_idx) {
-    int K = 1 << k;
-    int Ksum = K - 2;
-
-    for (int d = 0; d < K; ++d) {
-        int idx = pos[static_cast<int>(N - 1 - d)];
-        d_of_idx[idx] = d;
-    }
-
-    Fenwick bit;
-    bit.reset(K);
-
-    long long total = 0;
-    int idx_ptr = 0;
-    for (int idx = static_cast<int>(N); idx-- > 0;) {
-        int d1 = d_of_idx[idx];
-        if (d1 < 0) continue;
-        int limit = static_cast<int>(N - 1 - idx);
-        while (idx_ptr <= limit) {
-            int d2 = d_of_idx[idx_ptr];
-            if (d2 >= 0) {
-                bit.add(d2, 1);
-            }
-            ++idx_ptr;
+    static int bit_length(i64 x) {
+        int len = 0;
+        while (x > 0) {
+            ++len;
+            x >>= 1;
         }
-        int max_d2 = Ksum - d1 - 1;
-        if (max_d2 >= 0) {
-            if (max_d2 >= K) max_d2 = K - 1;
-            total += bit.sum_prefix(max_d2);
-        }
+        return len;
     }
 
-    for (int d = 0; d < K; ++d) {
-        int idx = pos[static_cast<int>(N - 1 - d)];
-        d_of_idx[idx] = -1;
+    i64 f(i64 x, i64 m) {
+        x %= m;
+        if (x <= 1) return 0;
+
+        const Key key{x, m};
+        auto it = cache_.find(key);
+        if (it != cache_.end()) return it->second;
+
+        const i64 t = m / x;
+        const i64 y = m % x;
+
+        const i64 term = static_cast<i64>((static_cast<u128>(t) * (t + 1) * x * (x - 1)) / 4);
+        const i64 res = term + (t + 1) * f(x, y) - t * f(x, x - y);
+
+        cache_.emplace(key, res);
+        return res;
     }
 
-    return total;
-}
+    i64 g(i64 x, i64 m) { return (m - 1) * (m - 2) - f(x, m); }
+};
 
-static long long count_tri_general(long long N, int k, const vector<int> &pos) {
-    long long pow2 = 1LL << k;
-    long long T = 2 * N - pow2;
-    if (T < 0) {
-        return N * (N + 1) / 2;
-    }
+void run_validations() {
+    Solver702 solver;
 
-    Fenwick bit;
-    bit.reset(static_cast<int>(N));
-
-    long long total = 0;
-    for (int t = static_cast<int>(N - 1); t >= 0; --t) {
-        int r_add = t + 1;
-        if (r_add < N) {
-            bit.add(pos[r_add], 1);
-        }
-        long long r_q = T - t;
-        if (0 <= r_q && r_q < N) {
-            int j = pos[static_cast<int>(r_q)];
-            int L = static_cast<int>(N - j);
-            total += bit.sum_prefix(L - 1);
-        }
-    }
-
-    if (T < N - 1) {
-        long long extra = 0;
-        for (int r = static_cast<int>(T + 1); r < N; ++r) {
-            extra += static_cast<long long>(N - pos[r]);
-        }
-        total += extra;
-    }
-
-    return total;
-}
-
-static long long compute_S_odd(long long N, int threads) {
-    if (N % 2 == 0) {
-        cerr << "This implementation assumes N is odd.\n";
-        exit(1);
-    }
-
-    long long total_tri = N * (3 * N + 1) / 2;
-    vector<int> pos(static_cast<size_t>(N));
-    vector<int> d_of_idx(static_cast<size_t>(N), -1);
-
-    long long S = 0;
-    long long F_prev = 0;
-
-    for (int k = 1;; ++k) {
-        long long pow2 = 1LL << k;
-        if (pow2 > 2 * N) {
-            S += total_tri - F_prev;
-            break;
-        }
-
-        long long step = pow2 % N;
-        build_pos_parallel(N, step, pos, threads);
-
-        long long Frect = count_rect(N, k);
-        long long Ftri = 0;
-        if (pow2 <= N) {
-            Ftri = count_tri_subset(N, k, pos, d_of_idx);
-        } else {
-            Ftri = count_tri_general(N, k, pos);
-        }
-        long long Fk = Frect + Ftri;
-
-        S += total_tri - F_prev;
-        F_prev = Fk;
-    }
-
-    return S;
-}
-
-static void run_validations() {
     struct Test {
-        long long N;
-        long long expected;
+        i64 N;
+        i64 expected;
     };
 
-    vector<Test> tests = {
+    const Test tests[] = {
         {3, 42},
         {5, 126},
         {123, 167178},
         {12345, 3185041956LL},
     };
 
-    for (const auto &t : tests) {
-        long long got = compute_S_odd(t.N, 1);
+    for (const auto& t : tests) {
+        i64 got = solver.solve(t.N);
         if (got != t.expected) {
-            cerr << "Validation failed for N=" << t.N << ": got " << got
-                 << ", expected " << t.expected << "\n";
-            exit(1);
+            std::cerr << "Validation failed for N=" << t.N << ": got " << got
+                      << ", expected " << t.expected << "\n";
+            std::exit(1);
         }
     }
 }
 
-int main(int argc, char **argv) {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
+}  // namespace
 
+int main(int argc, char** argv) {
     bool validate = false;
-    long long N = 123456789LL;
+    i64 N = 123456789LL;
+
     for (int i = 1; i < argc; ++i) {
-        string s = argv[i];
+        std::string s = argv[i];
         if (s == "--validate") {
             validate = true;
         } else {
-            N = stoll(s);
+            N = std::stoll(s);
         }
     }
 
@@ -244,8 +119,7 @@ int main(int argc, char **argv) {
         run_validations();
     }
 
-    int threads = thread_count();
-    long long ans = compute_S_odd(N, threads);
-    cout << ans << "\n";
+    Solver702 solver;
+    std::cout << solver.solve(N) << '\n';
     return 0;
 }

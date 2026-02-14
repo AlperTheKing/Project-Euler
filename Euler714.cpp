@@ -1,9 +1,11 @@
 #include <algorithm>
+#include <atomic>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -141,9 +143,52 @@ class DuodigitSolver {
     }
 
     cpp_int D(const int k) const {
+        if (k <= 0) {
+            return 0;
+        }
+
+        unsigned threads = std::thread::hardware_concurrency();
+        if (threads == 0U) {
+            threads = 4U;
+        }
+        if (threads <= 1U || k < 2000) {
+            cpp_int total = 0;
+            for (int n = 1; n <= k; ++n) {
+                total += d_of_n_int(n);
+            }
+            return total;
+        }
+
+        const unsigned use_threads = std::min<unsigned>(threads, static_cast<unsigned>(k));
+        std::atomic<int> next(1);
+        constexpr int chunk = 32;
+        std::vector<cpp_int> partial(static_cast<std::size_t>(use_threads), 0);
+        std::vector<std::thread> pool;
+        pool.reserve(use_threads);
+
+        for (unsigned t = 0; t < use_threads; ++t) {
+            pool.emplace_back([&, t]() {
+                cpp_int local = 0;
+                while (true) {
+                    const int start = next.fetch_add(chunk, std::memory_order_relaxed);
+                    if (start > k) {
+                        break;
+                    }
+                    const int end = std::min(k, start + chunk - 1);
+                    for (int n = start; n <= end; ++n) {
+                        local += d_of_n_int(n);
+                    }
+                }
+                partial[static_cast<std::size_t>(t)] = local;
+            });
+        }
+        for (auto& th : pool) {
+            th.join();
+        }
+
         cpp_int total = 0;
-        for (int n = 1; n <= k; ++n) {
-            total += d_of_n_int(n);
+        for (const auto& v : partial) {
+            total += v;
         }
         return total;
     }

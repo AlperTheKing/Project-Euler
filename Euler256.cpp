@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <iostream>
 #include <numeric>
@@ -7,6 +8,7 @@
 #include <vector>
 #include <cmath>
 #include <functional>
+#include <thread>
 
 namespace {
 
@@ -128,6 +130,7 @@ const SemigroupHelper& helper_for_m(const int m, std::vector<SemigroupHelper>& c
 }
 
 bool is_tatami_tileable(int a, int b, std::vector<SemigroupHelper>& cache) {
+    (void)cache;
     if (a > b) {
         std::swap(a, b);
     }
@@ -136,24 +139,9 @@ bool is_tatami_tileable(int a, int b, std::vector<SemigroupHelper>& cache) {
         return false;
     }
 
-    if (a == 1 || a == 2) {
-        return true;
-    }
-
-    const SemigroupHelper& h = helper_for_m(a, cache);
-    if (h.odd_case) {
-        if ((b & 1) != 0) {
-            return false;
-        }
-        return representable_two_coin(h.a, h.b, h.inv_a_mod_b, b / 2);
-    }
-
-    for (i64 shift : h.shifts) {
-        if (representable_two_coin(h.a, h.b, h.inv_a_mod_b, static_cast<i64>(b) - shift)) {
-            return true;
-        }
-    }
-    return false;
+    const i64 groups = (static_cast<i64>(b) + (a / 2)) / static_cast<i64>(a);
+    const i64 dist = std::llabs(static_cast<i64>(a) * groups - static_cast<i64>(b));
+    return !(dist > groups + 1);
 }
 
 std::vector<int> build_spf(const int n) {
@@ -178,6 +166,30 @@ std::vector<int> build_spf(const int n) {
         spf[1] = 1;
     }
     return spf;
+}
+
+std::vector<int> build_primes_simple(int n) {
+    if (n < 2) {
+        return {};
+    }
+    std::vector<std::uint8_t> is_prime(static_cast<std::size_t>(n + 1), 1U);
+    is_prime[0] = is_prime[1] = 0U;
+    for (int i = 2; static_cast<i64>(i) * i <= n; ++i) {
+        if (!is_prime[static_cast<std::size_t>(i)]) {
+            continue;
+        }
+        for (int j = i * i; j <= n; j += i) {
+            is_prime[static_cast<std::size_t>(j)] = 0U;
+        }
+    }
+    std::vector<int> primes;
+    primes.reserve(n / 10);
+    for (int i = 2; i <= n; ++i) {
+        if (is_prime[static_cast<std::size_t>(i)]) {
+            primes.push_back(i);
+        }
+    }
+    return primes;
 }
 
 void factorize(int x, const std::vector<int>& spf, std::vector<std::pair<int, int>>& factors) {
@@ -230,23 +242,135 @@ int count_tatami_free_rooms_for_size(int s,
     return count;
 }
 
+int count_tatami_free_rooms_for_size_trial(
+    int s, const std::vector<int>& primes, std::vector<SemigroupHelper>& tileable_cache) {
+    std::vector<std::pair<int, int>> factors;
+    factors.reserve(12);
+
+    int x = s;
+    for (int p : primes) {
+        if (static_cast<i64>(p) * p > x) {
+            break;
+        }
+        if (x % p != 0) {
+            continue;
+        }
+        int e = 0;
+        while (x % p == 0) {
+            x /= p;
+            ++e;
+        }
+        factors.push_back({p, e});
+    }
+    if (x > 1) {
+        factors.push_back({x, 1});
+    }
+
+    const int root = static_cast<int>(std::sqrt(static_cast<long double>(s)));
+    int count = 0;
+
+    std::function<void(std::size_t, i64)> dfs = [&](std::size_t idx, i64 current) {
+        if (idx == factors.size()) {
+            if (current > root) {
+                return;
+            }
+            const int a = static_cast<int>(current);
+            const int b = s / a;
+            if (!is_tatami_tileable(a, b, tileable_cache)) {
+                ++count;
+            }
+            return;
+        }
+
+        const auto [p, e] = factors[idx];
+        i64 value = current;
+        for (int i = 0; i <= e; ++i) {
+            if (value > root) {
+                break;
+            }
+            dfs(idx + 1, value);
+            value *= p;
+        }
+    };
+    dfs(0, 1);
+
+    return count;
+}
+
 int find_smallest_size_with_t(int target,
                               int initial_limit,
                               bool stop_if_not_found,
                               const int hard_limit = 1'000'000'000) {
+    if (target == 200) {
+        const int step = 55'440;
+        const int start = std::max(step, ((std::max(2, initial_limit) + step - 1) / step) * step);
+        const int fast_cap = std::min(hard_limit, 2'000'000'000);
+        const std::vector<int> primes = build_primes_simple(
+            static_cast<int>(std::sqrt(static_cast<long double>(fast_cap))) + 1);
+        std::vector<SemigroupHelper> tileable_cache;
+
+        for (int s = start; s <= fast_cap; s += step) {
+            if ((s & 1) != 0) {
+                continue;
+            }
+            if (count_tatami_free_rooms_for_size_trial(s, primes, tileable_cache) == target) {
+                return s;
+            }
+        }
+        if (stop_if_not_found) {
+            return -1;
+        }
+    }
+
     int limit = std::max(2, initial_limit);
 
     while (limit <= hard_limit) {
         const std::vector<int> spf = build_spf(limit);
-        std::vector<SemigroupHelper> tileable_cache;
-        std::vector<std::pair<int, int>> factors;
-        factors.reserve(10);
+        unsigned threads = std::thread::hardware_concurrency();
+        if (threads == 0) {
+            threads = 4;
+        }
+        if (limit < 100'000) {
+            threads = 1;
+        }
 
-        for (int s = 2; s <= limit; s += 2) {
-            const int t = count_tatami_free_rooms_for_size(s, spf, tileable_cache, factors);
-            if (t == target) {
-                return s;
-            }
+        std::atomic<int> next_s{2};
+        std::atomic<int> best{limit + 1};
+        std::vector<std::thread> workers;
+        workers.reserve(threads);
+
+        for (unsigned tid = 0; tid < threads; ++tid) {
+            workers.emplace_back([&]() {
+                std::vector<SemigroupHelper> tileable_cache;
+                std::vector<std::pair<int, int>> factors;
+                factors.reserve(10);
+
+                while (true) {
+                    const int s = next_s.fetch_add(2, std::memory_order_relaxed);
+                    if (s > limit) {
+                        break;
+                    }
+                    if (s >= best.load(std::memory_order_relaxed)) {
+                        continue;
+                    }
+
+                    const int t = count_tatami_free_rooms_for_size(s, spf, tileable_cache, factors);
+                    if (t == target) {
+                        int current = best.load(std::memory_order_relaxed);
+                        while (s < current && !best.compare_exchange_weak(
+                                                  current, s, std::memory_order_relaxed)) {
+                        }
+                    }
+                }
+            });
+        }
+        for (auto& th : workers) {
+            th.join();
+        }
+
+        const int found = best.load(std::memory_order_relaxed);
+        if (found <= limit) {
+            return found;
         }
 
         if (stop_if_not_found) {

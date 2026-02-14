@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <cassert>
+#include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -62,68 +64,101 @@ void build_divisors_rec(int idx, u64 cur, const std::vector<std::pair<u64, int>>
     }
 }
 
-u64 SP(int n) {
-    const std::vector<int> spf = build_spf(n);
+u128 solve_single_m(int m, const std::vector<int>& spf, std::vector<u64>& divs) {
+    const u64 n2 = static_cast<u64>(m) * static_cast<u64>(m);
 
+    const auto fac = factor_square(m, spf);
+    divs.clear();
+    divs.reserve(256);
+    build_divisors_rec(0, 1ULL, fac, divs);
+    std::sort(divs.begin(), divs.end());
+
+    const int L = static_cast<int>(divs.size());
     u128 ans = 0;
-    std::vector<u64> divs;
 
-    for (int m = 1; m <= n; ++m) {
-        const u64 n2 = static_cast<u64>(m) * static_cast<u64>(m);
+    for (int i = 0; i < L; ++i) {
+        const u64 w = divs[static_cast<std::size_t>(i)];
 
-        const auto fac = factor_square(m, spf);
-        divs.clear();
-        divs.reserve(256);
-        build_divisors_rec(0, 1ULL, fac, divs);
-        std::sort(divs.begin(), divs.end());
+        for (int j = i; j < L; ++j) {
+            const u64 z = divs[static_cast<std::size_t>(j)];
+            if (w > n2 / z) {
+                break;
+            }
+            const u64 wz = w * z;
+            if (n2 % wz != 0ULL) {
+                continue;
+            }
 
-        const int L = static_cast<int>(divs.size());
+            const u64 rem = n2 / wz;
+            if (z > rem / z) {
+                break;
+            }
 
-        for (int i = 0; i < L; ++i) {
-            const u64 w = divs[static_cast<std::size_t>(i)];
-
-            for (int j = i; j < L; ++j) {
-                const u64 z = divs[static_cast<std::size_t>(j)];
-                const u64 wz = w * z;
-                if (wz > n2) {
+            for (int k = j; k < L; ++k) {
+                const u64 y = divs[static_cast<std::size_t>(k)];
+                if (y > rem / y) {
                     break;
                 }
-                if (n2 % wz != 0ULL) {
+                if (rem % y != 0ULL) {
                     continue;
                 }
 
-                const u64 rem = n2 / wz;
-                if (z * z > rem) {
-                    break;
+                const u64 x = rem / y;
+                if (x < y) {
+                    continue;
+                }
+                if (x >= y + z + w) {
+                    continue;
+                }
+                const u64 p = x + y + z + w;
+                if ((p & 1ULL) != 0ULL) {
+                    continue;
                 }
 
-                for (int k = j; k < L; ++k) {
-                    const u64 y = divs[static_cast<std::size_t>(k)];
-                    if (y * y > rem) {
-                        break;
-                    }
-                    if (rem % y != 0ULL) {
-                        continue;
-                    }
-
-                    const u64 x = rem / y;
-                    if (x < y) {
-                        continue;
-                    }
-                    if (x >= y + z + w) {
-                        continue;
-                    }
-                    const u64 p = x + y + z + w;
-                    if ((p & 1ULL) != 0ULL) {
-                        continue;
-                    }
-
-                    ans += static_cast<u128>(p);
-                }
+                ans += static_cast<u128>(p);
             }
         }
     }
 
+    return ans;
+}
+
+u64 SP(int n) {
+    const std::vector<int> spf = build_spf(n);
+
+    unsigned threads = std::thread::hardware_concurrency();
+    if (threads == 0) {
+        threads = 8;
+    }
+
+    std::atomic<int> next_m{1};
+    std::vector<u128> partial(threads, 0);
+    std::vector<std::thread> workers;
+    workers.reserve(threads);
+
+    for (unsigned tid = 0; tid < threads; ++tid) {
+        workers.emplace_back([&, tid]() {
+            std::vector<u64> divs;
+            u128 local = 0;
+            while (true) {
+                const int m = next_m.fetch_add(1, std::memory_order_relaxed);
+                if (m > n) {
+                    break;
+                }
+                local += solve_single_m(m, spf, divs);
+            }
+            partial[tid] = local;
+        });
+    }
+
+    for (auto& t : workers) {
+        t.join();
+    }
+
+    u128 ans = 0;
+    for (u128 x : partial) {
+        ans += x;
+    }
     return static_cast<u64>(ans);
 }
 

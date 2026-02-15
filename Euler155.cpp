@@ -1,9 +1,9 @@
 #include <algorithm>
+#include <climits>
 #include <cstdint>
 #include <iostream>
 #include <numeric>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -20,16 +20,15 @@ struct Fraction {
     u64 num = 0;
     u64 den = 1;
 
+    bool operator<(const Fraction& other) const {
+        if (num != other.num) {
+            return num < other.num;
+        }
+        return den < other.den;
+    }
+
     bool operator==(const Fraction& other) const {
         return num == other.num && den == other.den;
-    }
-};
-
-struct FractionHash {
-    std::size_t operator()(const Fraction& f) const {
-        const std::size_t h1 = std::hash<u64>{}(f.num);
-        const std::size_t h2 = std::hash<u64>{}(f.den);
-        return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6) + (h1 >> 2));
     }
 };
 
@@ -85,23 +84,30 @@ Fraction parallel_combine(const Fraction& a, const Fraction& b) {
     return make_fraction(static_cast<u64>(num), static_cast<u64>(den));
 }
 
-Fraction series_combine(const Fraction& a, const Fraction& b) {
-    const u128 num = static_cast<u128>(a.num) * b.num;
-    const u128 den = static_cast<u128>(a.num) * b.den + static_cast<u128>(b.num) * a.den;
-    return make_fraction(static_cast<u64>(num), static_cast<u64>(den));
-}
-
 u64 distinct_up_to(const int max_n) {
     std::vector<std::vector<Fraction>> ways(static_cast<std::size_t>(max_n + 1));
-    std::unordered_set<Fraction, FractionHash> all;
-    all.reserve(4000000);
+    std::vector<Fraction> all;
+    all.reserve(4'000'000);
 
     ways[1] = {{1, 1}};
-    all.insert({1, 1});
+    all.push_back({1, 1});
 
     for (int n = 2; n <= max_n; ++n) {
-        std::unordered_set<Fraction, FractionHash> cur;
-        cur.reserve(200000);
+        std::vector<Fraction> cur;
+        std::size_t estimate = 0;
+        for (int a = 1; a <= n / 2; ++a) {
+            const int b = n - a;
+            const auto& left = ways[static_cast<std::size_t>(a)];
+            const auto& right = ways[static_cast<std::size_t>(b)];
+            const std::size_t combos = left.size() * right.size();
+            const std::size_t term_count = 2ULL * combos;
+            if (estimate <= std::numeric_limits<std::size_t>::max() - term_count) {
+                estimate += term_count;
+            } else {
+                estimate = std::numeric_limits<std::size_t>::max();
+            }
+        }
+        cur.reserve(std::min<std::size_t>(estimate, 16'000'000));
 
         for (int a = 1; a <= n / 2; ++a) {
             const int b = n - a;
@@ -112,17 +118,23 @@ u64 distinct_up_to(const int max_n) {
                 const std::size_t j_start = (a == b) ? i : 0;
                 for (std::size_t j = j_start; j < right.size(); ++j) {
                     const Fraction p = parallel_combine(left[i], right[j]);
-                    const Fraction s = series_combine(left[i], right[j]);
-                    cur.insert(p);
-                    cur.insert(s);
+                    cur.push_back(p);
+                    if (p.num != p.den) {
+                        cur.push_back({p.den, p.num});
+                    }
                 }
             }
         }
 
-        ways[static_cast<std::size_t>(n)] = std::vector<Fraction>(cur.begin(), cur.end());
-        all.insert(cur.begin(), cur.end());
+        std::sort(cur.begin(), cur.end());
+        cur.erase(std::unique(cur.begin(), cur.end()), cur.end());
+
+        ways[static_cast<std::size_t>(n)] = std::move(cur);
+        all.insert(all.end(), ways[static_cast<std::size_t>(n)].begin(), ways[static_cast<std::size_t>(n)].end());
     }
 
+    std::sort(all.begin(), all.end());
+    all.erase(std::unique(all.begin(), all.end()), all.end());
     return static_cast<u64>(all.size());
 }
 

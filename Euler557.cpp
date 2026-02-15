@@ -6,6 +6,7 @@
 #include <numeric>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -31,10 +32,9 @@ static std::string to_string_u128(u128 value) {
 //   T = a*(a+b)*(a+c) / (a^2 - b*c)
 // and the cut exists with integer (a,b,c,d) iff (a^2 - b*c) > 0 and T is an integer
 // (then d = T-a-b-c is automatically a positive integer).
-static u128 S(int n) {
+static u128 S_range(int n, int a_begin, int a_end) {
     u128 total = 0;
-
-    for (int a = 1; a <= n; ++a) {
+    for (int a = a_begin; a <= a_end; ++a) {
         const int a_room = n - a;
         if (a_room < 3) continue;  // need b,c,d >= 1
 
@@ -91,6 +91,40 @@ static u128 S(int n) {
         }
     }
 
+    return total;
+}
+
+static u128 S(int n) {
+    unsigned threads = std::max(1U, std::thread::hardware_concurrency());
+    if (threads <= 1U || n < 200) {
+        return S_range(n, 1, n);
+    }
+
+    threads = std::min<unsigned>(threads, static_cast<unsigned>(n));
+    const int chunk = (n + static_cast<int>(threads) - 1) / static_cast<int>(threads);
+
+    std::vector<u128> partial(static_cast<std::size_t>(threads), 0U);
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(threads));
+
+    for (unsigned t = 0; t < threads; ++t) {
+        const int begin = static_cast<int>(t) * chunk + 1;
+        const int end = std::min(n, begin + chunk - 1);
+        workers.emplace_back([&, t, begin, end]() {
+            if (begin > end) {
+                return;
+            }
+            partial[static_cast<std::size_t>(t)] = S_range(n, begin, end);
+        });
+    }
+    for (auto& th : workers) {
+        th.join();
+    }
+
+    u128 total = 0U;
+    for (u128 v : partial) {
+        total += v;
+    }
     return total;
 }
 

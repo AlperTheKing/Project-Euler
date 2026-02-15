@@ -31,21 +31,21 @@ static inline u64 mod_inv(u64 x) {
     return mod_pow(x, kMod - 2);
 }
 
-static std::vector<u64> inverse_range(u64 start, u64 len) {
-    std::vector<u64> pref(len);
+static void inverse_range(u64 start, u64 len, std::vector<u64>& pref) {
+    pref.resize(static_cast<std::size_t>(len));
     pref[0] = start % kMod;
     for (u64 i = 1; i < len; ++i) {
-        pref[i] = mod_mul(pref[i - 1], (start + i) % kMod);
+        pref[static_cast<std::size_t>(i)] =
+            mod_mul(pref[static_cast<std::size_t>(i - 1)], (start + i) % kMod);
     }
 
-    u64 inv_prod = mod_inv(pref[len - 1]);
+    u64 inv_prod = mod_inv(pref[static_cast<std::size_t>(len - 1)]);
     for (u64 i = len; i-- > 0;) {
-        const u64 prev = (i == 0) ? 1 : pref[i - 1];
+        const u64 prev = (i == 0) ? 1 : pref[static_cast<std::size_t>(i - 1)];
         const u64 v = (start + i) % kMod;
-        pref[i] = mod_mul(inv_prod, prev);
+        pref[static_cast<std::size_t>(i)] = mod_mul(inv_prod, prev);
         inv_prod = mod_mul(inv_prod, v);
     }
-    return pref;
 }
 
 static u64 binom_mod(u64 n, u64 k) {
@@ -55,57 +55,81 @@ static u64 binom_mod(u64 n, u64 k) {
 
     u64 out = 1;
     const u64 offset = n - k;
+    std::vector<u64> invs;
+    invs.reserve(static_cast<std::size_t>(kBlock));
     for (u64 l = 1; l <= k; l += kBlock) {
         const u64 r = std::min(k, l + kBlock - 1);
         const u64 len = r - l + 1;
-        std::vector<u64> invs = inverse_range(l, len);
+        inverse_range(l, len, invs);
         for (u64 i = 0; i < len; ++i) {
             out = mod_mul(out, (offset + l + i) % kMod);
-            out = mod_mul(out, invs[i]);
+            out = mod_mul(out, invs[static_cast<std::size_t>(i)]);
         }
     }
     return out;
 }
 
-static u64 coeff_q(u64 m, u64 n) {
-    const u64 a = std::min(m, n);
-    const u64 b = std::max(m, n);
-    const u64 total = a + b;
-    if (total & 1ULL) return 0;
-    const u64 t = total >> 1;
-    const u64 max_k = a >> 1;
-
-    u64 term = binom_mod(t, a);
-    u64 sum = term;
-
-    if (max_k > 0) {
-        const u64 base2 = t - a + 1;
-        for (u64 l = 0; l < max_k; l += kBlock) {
-            const u64 r = std::min(max_k - 1, l + kBlock - 1);
-            const u64 len = r - l + 1;
-            std::vector<u64> inv1 = inverse_range(l + 1, len);
-            std::vector<u64> inv2 = inverse_range(base2 + l, len);
-            for (u64 i = 0; i < len; ++i) {
-                const u64 k = l + i;
-                const u64 u = a - 2 * k;
-                term = mod_mul(term, u % kMod);
-                term = mod_mul(term, (u - 1) % kMod);
-                term = mod_mul(term, inv1[i]);
-                term = mod_mul(term, inv2[i]);
-                sum += term;
-                if (sum >= kMod) sum -= kMod;
-            }
-        }
-    }
-
-    return (a & 1ULL) ? (sum == 0 ? 0 : kMod - sum) : sum;
-}
-
 static u64 solve(u64 m, u64 n) {
     if ((m + n) & 1ULL) return 0;
-    const u64 c = coeff_q(m, n);
-    const u64 b = binom_mod(m + n, m);
-    return mod_mul((b + mod_mul(2, c)) % kMod, kInv3);
+
+    const u64 t = (m + n) >> 1;
+    const u64 parity = m & 1ULL;
+    const u64 max_k = std::min(m, n);
+
+    u64 k = parity;
+    u64 a = (m - parity) >> 1;
+    u64 b = (n - parity) >> 1;
+
+    u64 weight = 0;
+    if (parity == 0ULL) {
+        weight = binom_mod(t, a);
+    } else {
+        weight = mod_mul(t % kMod, binom_mod(t - 1ULL, a));
+    }
+
+    u64 pow2k = (parity == 0ULL) ? 1ULL : 2ULL;
+    const u64 sign_part = (parity == 0ULL) ? 2ULL : (kMod - 2ULL);  // 2*(-1)^k
+
+    u64 answer = 0ULL;
+    auto add_current = [&]() {
+        u64 f3 = pow2k + sign_part;
+        if (f3 >= kMod) f3 -= kMod;
+        f3 = mod_mul(f3, kInv3);
+        answer += mod_mul(weight, f3);
+        if (answer >= kMod) answer -= kMod;
+    };
+
+    add_current();
+    if (k == max_k) return answer;
+
+    u64 updates = (max_k - k) >> 1;
+    std::vector<u64> invs;
+    invs.reserve(static_cast<std::size_t>(2 * kBlock));
+
+    while (updates > 0ULL) {
+        const u64 len = std::min<u64>(updates, kBlock);
+        inverse_range(k + 1ULL, 2ULL * len, invs);
+
+        for (u64 i = 0; i < len; ++i) {
+            const u64 inv_k1 = invs[static_cast<std::size_t>(2ULL * i)];
+            const u64 inv_k2 = invs[static_cast<std::size_t>(2ULL * i + 1ULL)];
+
+            weight = mod_mul(weight, a % kMod);
+            weight = mod_mul(weight, b % kMod);
+            weight = mod_mul(weight, inv_k1);
+            weight = mod_mul(weight, inv_k2);
+
+            --a;
+            --b;
+            k += 2ULL;
+            pow2k = mod_mul(pow2k, 4ULL);
+
+            add_current();
+        }
+        updates -= len;
+    }
+
+    return answer;
 }
 
 static u64 brute_small(int m, int n) {

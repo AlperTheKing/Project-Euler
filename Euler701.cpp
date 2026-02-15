@@ -167,6 +167,7 @@ long double expected_max_area(const int w, const int h) {
     const int row_masks = 1 << w;
     for (int r = 0; r < h; ++r) {
         next.clear();
+        next.reserve(static_cast<std::size_t>(cur.size()) << w);
         for (const auto& kv : cur) {
             const State& s = kv.first;
             const u64 ways = kv.second;
@@ -177,6 +178,7 @@ long double expected_max_area(const int w, const int h) {
             }
         }
         cur.swap(next);
+        next.reserve(std::max<std::size_t>(cur.size() << w, 4096ULL));
     }
 
     u128 numerator = 0;
@@ -201,4 +203,3 @@ int main() {
     std::cout << std::fixed << std::setprecision(8) << static_cast<double>(e77) << '\n';
     return 0;
 }
-

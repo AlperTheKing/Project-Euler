@@ -37,39 +37,31 @@ bool hits_zero(int mod, int p) {
         return true;
     }
 
-    u64 tortoise = 1ULL % static_cast<u64>(mod);
-    u64 hare = tortoise;
-    if (tortoise == 0) {
+    const u64 mod_u = static_cast<u64>(mod);
+    const u64 start = 1ULL % mod_u;
+    if (start == 0ULL) {
         return true;
     }
 
-    while (true) {
-        tortoise = next_term(tortoise, p, mod);
-        if (tortoise == 0) {
-            return true;
-        }
-
-        hare = next_term(hare, p, mod);
-        if (hare == 0) {
-            return true;
-        }
-
-        hare = next_term(hare, p, mod);
-        if (hare == 0) {
-            return true;
-        }
-
-        if (tortoise == hare) {
-            break;
-        }
+    u64 tortoise = start;
+    u64 hare = next_term(start, p, mod);
+    if (hare == 0ULL) {
+        return true;
     }
 
-    u64 x = next_term(tortoise, p, mod);
-    while (x != tortoise) {
-        if (x == 0) {
+    u64 power = 1ULL;
+    u64 lam = 1ULL;
+    while (tortoise != hare) {
+        if (power == lam) {
+            tortoise = hare;
+            power <<= 1U;
+            lam = 0ULL;
+        }
+        hare = next_term(hare, p, mod);
+        if (hare == 0ULL) {
             return true;
         }
-        x = next_term(x, p, mod);
+        ++lam;
     }
 
     return false;
@@ -102,38 +94,41 @@ Sieve build_sieve(int n) {
     return {std::move(primes), std::move(spf)};
 }
 
-std::vector<int> unique_prime_divisors(int x, const std::vector<int>& spf) {
-    std::vector<int> divisors;
+int factor_list(int x, const std::vector<int>& spf, int* factors, const int limit) {
+    int count = 0;
     while (x > 1) {
         const int p = spf[x];
-        divisors.push_back(p);
+        if (count < limit) {
+            factors[count] = p;
+        }
+        ++count;
+
         while (x % p == 0) {
             x /= p;
         }
     }
-    return divisors;
+    return count;
 }
 
 std::vector<int> good_primes_upto(int limit) {
     const Sieve sieve = build_sieve(limit);
 
     std::vector<int> good;
+    good.reserve(sieve.primes.size() / 8);
+    int factor_buffer[32];
+
     for (int q : sieve.primes) {
         if (q == 2) {
             good.push_back(q);
             continue;
         }
 
-        if (!hits_zero(q, 2)) {
-            continue;
-        }
+        const int divisor_count = factor_list(q - 1, sieve.spf, factor_buffer, static_cast<int>(std::size(factor_buffer)));
+        std::sort(factor_buffer, factor_buffer + divisor_count, std::greater<int>());
 
         bool ok = true;
-        const std::vector<int> divisors = unique_prime_divisors(q - 1, sieve.spf);
-        for (int p : divisors) {
-            if (p == 2) {
-                continue;
-            }
+        for (int i = 0; i < divisor_count; ++i) {
+            const int p = factor_buffer[i];
             if (!hits_zero(q, p)) {
                 ok = false;
                 break;

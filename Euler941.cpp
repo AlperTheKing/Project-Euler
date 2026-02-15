@@ -2,8 +2,11 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <numeric>
+#include <pthread.h>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -201,13 +204,11 @@ struct Ranker {
     }
 };
 
-std::array<int, kN + 1> to_digits1(std::uint64_t x) {
-    std::array<int, kN + 1> w{};
+void to_digits1(std::uint64_t x, std::array<int, kN + 1>& w) {
     for (int i = kN; i >= 1; --i) {
         w[i] = static_cast<int>(x % 10ULL) + 1;
         x /= 10ULL;
     }
-    return w;
 }
 
 struct Item {
@@ -215,29 +216,68 @@ struct Item {
     std::uint64_t value;
 };
 
+int detect_thread_count() {
+    const char* env = std::getenv("PE_THREADS");
+    if (env != nullptr) {
+        const int t = std::atoi(env);
+        if (t > 0) {
+            return t;
+        }
+    }
+    const long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+    if (nproc > 0) {
+        return static_cast<int>(nproc);
+    }
+    return 4;
+}
+
+struct RankTask {
+    Item* items = nullptr;
+    int begin = 0;
+    int end = 0;
+};
+
+void* rank_worker(void* arg) {
+    auto* task = static_cast<RankTask*>(arg);
+    Ranker ranker;
+    std::array<int, kN + 1> w{};
+    for (int i = task->begin; i < task->end; ++i) {
+        to_digits1(task->items[static_cast<std::size_t>(i)].value, w);
+        task->items[static_cast<std::size_t>(i)].rank = ranker.rank_db(kN, w);
+    }
+    return nullptr;
+}
+
 std::uint64_t solve(int N, bool exact_small = false) {
-    std::vector<Item> items;
-    std::vector<std::uint64_t> sequence;
-    items.reserve(static_cast<std::size_t>(N));
-    sequence.reserve(static_cast<std::size_t>(N));
+    std::vector<Item> items(static_cast<std::size_t>(N));
 
     std::uint64_t a = 0;
     for (int i = 0; i < N; ++i) {
         a = (kLcgMul * a + kLcgAdd) % kLcgMod;
-        sequence.push_back(a);
+        items[static_cast<std::size_t>(i)].value = a;
     }
 
-    items.resize(static_cast<std::size_t>(N));
+    int thread_count = detect_thread_count();
+    if (thread_count > N) {
+        thread_count = N;
+    }
+    if (thread_count < 1) {
+        thread_count = 1;
+    }
 
-#pragma omp parallel
-    {
-        Ranker ranker;
-
-#pragma omp for
-        for (int i = 0; i < N; ++i) {
-            const auto w = to_digits1(sequence[static_cast<std::size_t>(i)]);
-            items[static_cast<std::size_t>(i)] = {ranker.rank_db(kN, w), sequence[static_cast<std::size_t>(i)]};
-        }
+    std::vector<pthread_t> threads(static_cast<std::size_t>(thread_count));
+    std::vector<RankTask> tasks(static_cast<std::size_t>(thread_count));
+    int begin = 0;
+    for (int t = 0; t < thread_count; ++t) {
+        const int block = N / thread_count + (t < (N % thread_count) ? 1 : 0);
+        const int end = begin + block;
+        tasks[static_cast<std::size_t>(t)] = RankTask{items.data(), begin, end};
+        pthread_create(&threads[static_cast<std::size_t>(t)], nullptr, rank_worker,
+                       &tasks[static_cast<std::size_t>(t)]);
+        begin = end;
+    }
+    for (int t = 0; t < thread_count; ++t) {
+        pthread_join(threads[static_cast<std::size_t>(t)], nullptr);
     }
 
     std::sort(items.begin(), items.end(), [](const Item& lhs, const Item& rhs) {

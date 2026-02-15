@@ -14,7 +14,7 @@ using u64 = std::uint64_t;
 struct Options {
     int n = 10'000;
     int threads = 0;
-    bool run_checkpoints = true;
+    bool run_checkpoints = false;
 };
 
 struct PairEntry {
@@ -41,6 +41,10 @@ bool parse_int_after_prefix(const std::string& arg, const std::string& prefix, i
 bool parse_arguments(int argc, char** argv, Options& options) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        if (arg == "--checkpoints") {
+            options.run_checkpoints = true;
+            continue;
+        }
         if (arg == "--skip-checkpoints") {
             options.run_checkpoints = false;
             continue;

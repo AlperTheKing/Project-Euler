@@ -2,11 +2,10 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <cmath>
-#include <functional>
+#include <unordered_map>
 
 namespace {
 
@@ -18,10 +17,14 @@ using u128 = __uint128_t;
 constexpr u64 kMod = 123'456'789ULL;
 
 u64 next_value(u64 x, u64 mod) {
-    const u64 y = (x + mod - 1) % mod;
+    const u64 y = (x == 0 ? mod - 1 : x - 1);
     const u64 y2 = static_cast<u64>((u128)y * y % mod);
     const u64 y3 = static_cast<u64>((u128)y2 * y % mod);
-    return (y3 + 2) % mod;
+    u64 z = y3 + 2;
+    if (z >= mod) {
+        z -= mod;
+    }
+    return z;
 }
 
 std::pair<u64, u64> cycle_mu_lambda(u64 mod) {
@@ -57,6 +60,73 @@ struct Group {
     u32 q;
 };
 
+class SumPhi {
+public:
+    explicit SumPhi(u32 n) {
+        constexpr u32 kBase = 1'000'000;
+        limit_ = (n < kBase ? n : kBase);
+
+        std::vector<u32> lp(static_cast<std::size_t>(limit_) + 1, 0);
+        std::vector<u32> phi(static_cast<std::size_t>(limit_) + 1, 0);
+        phi[1] = 1;
+
+        std::vector<u32> primes;
+        primes.reserve(static_cast<std::size_t>(limit_ / 10));
+        for (u32 i = 2; i <= limit_; ++i) {
+            if (lp[i] == 0) {
+                lp[i] = i;
+                primes.push_back(i);
+                phi[i] = i - 1;
+            }
+            for (u32 p : primes) {
+                u64 v = static_cast<u64>(i) * p;
+                if (v > limit_ || p > lp[i]) {
+                    break;
+                }
+                lp[static_cast<u32>(v)] = p;
+                if (i % p == 0) {
+                    phi[static_cast<u32>(v)] = phi[i] * p;
+                    break;
+                }
+                phi[static_cast<u32>(v)] = phi[i] * (p - 1);
+            }
+        }
+
+        prefix_.assign(static_cast<std::size_t>(limit_) + 1, 0);
+        for (u32 i = 1; i <= limit_; ++i) {
+            prefix_[i] = prefix_[i - 1] + phi[i];
+        }
+
+        memo_.reserve(1 << 17);
+    }
+
+    u64 get(u64 n) {
+        if (n <= limit_) {
+            return prefix_[static_cast<std::size_t>(n)];
+        }
+        const auto it = memo_.find(n);
+        if (it != memo_.end()) {
+            return it->second;
+        }
+
+        u64 ans = static_cast<u64>((static_cast<u128>(n) * (n + 1)) / 2);
+        for (u64 l = 2; l <= n;) {
+            const u64 q = n / l;
+            const u64 r = n / q;
+            const u64 cnt = r - l + 1;
+            ans -= cnt * get(q);
+            l = r + 1;
+        }
+        memo_[n] = ans;
+        return ans;
+    }
+
+private:
+    u32 limit_ = 0;
+    std::vector<u64> prefix_;
+    std::unordered_map<u64, u64> memo_;
+};
+
 u64 solve(u32 N) {
     const auto [mu0, lambda] = cycle_mu_lambda(kMod);
     const u64 cycle_start = mu0 + 1;
@@ -86,49 +156,7 @@ u64 solve(u32 N) {
         l = r + 1;
     }
 
-    std::vector<u32> q_values;
-    q_values.reserve(groups.size());
-    for (const auto& g : groups) {
-        q_values.push_back(g.q);
-    }
-    std::sort(q_values.begin(), q_values.end());
-    q_values.erase(std::unique(q_values.begin(), q_values.end()), q_values.end());
-
-    std::unordered_map<u32, u32> coprime_pair_count_mod;
-    coprime_pair_count_mod.reserve(q_values.size() * 2);
-
-    std::vector<u32> phi(static_cast<std::size_t>(N) + 1);
-    for (u32 i = 0; i <= N; ++i) {
-        phi[i] = i;
-    }
-
-    for (u32 p = 2; p <= N; ++p) {
-        if (phi[p] != p) {
-            continue;
-        }
-        for (u32 j = p; j <= N; j += p) {
-            phi[j] -= phi[j] / p;
-        }
-    }
-
-    i64 prefix_phi_mod = 0;
-    std::size_t q_ptr = 0;
-    for (u32 i = 1; i <= N; ++i) {
-        prefix_phi_mod += phi[i];
-        prefix_phi_mod %= static_cast<i64>(kMod);
-
-        while (q_ptr < q_values.size() && q_values[q_ptr] == i) {
-            i64 v = (2 * prefix_phi_mod - 1) % static_cast<i64>(kMod);
-            if (v < 0) {
-                v += static_cast<i64>(kMod);
-            }
-            coprime_pair_count_mod[q_values[q_ptr]] = static_cast<u32>(v);
-            ++q_ptr;
-        }
-    }
-
-    phi.clear();
-    phi.shrink_to_fit();
+    SumPhi sum_phi(N);
 
     i64 answer = 0;
     i64 pref_u_mod = 0;
@@ -164,7 +192,8 @@ u64 solve(u32 N) {
             segment += static_cast<i64>(kMod);
         }
 
-        const u32 cmod = coprime_pair_count_mod[g.q];
+        const u64 sp = sum_phi.get(g.q) % kMod;
+        const u32 cmod = static_cast<u32>((2ULL * sp + kMod - 1ULL) % kMod);
         answer += static_cast<i64>((u128)segment * cmod % kMod);
         answer %= static_cast<i64>(kMod);
 

@@ -8,7 +8,6 @@
 namespace {
 
 using u64 = std::uint64_t;
-using u128 = __uint128_t;
 
 constexpr u64 kMod = 1'000'000'007ULL;
 
@@ -23,7 +22,7 @@ u64 mod_sub(u64 a, u64 b) {
 }
 
 u64 mod_mul(u64 a, u64 b) {
-    return static_cast<u64>((static_cast<u128>(a) * static_cast<u128>(b)) % kMod);
+    return (a * b) % kMod;
 }
 
 u64 mod_pow(u64 base, u64 exp) {
@@ -127,10 +126,11 @@ std::vector<u64> combine_poly(const std::vector<u64>& a,
         if (a[static_cast<std::size_t>(i)] == 0) continue;
         for (int j = 0; j < k; ++j) {
             if (b[static_cast<std::size_t>(j)] == 0) continue;
-            tmp[static_cast<std::size_t>(i + j)] =
-                (tmp[static_cast<std::size_t>(i + j)] +
-                 mod_mul(a[static_cast<std::size_t>(i)], b[static_cast<std::size_t>(j)])) %
-                kMod;
+            const u64 add =
+                mod_mul(a[static_cast<std::size_t>(i)], b[static_cast<std::size_t>(j)]);
+            u64& cell = tmp[static_cast<std::size_t>(i + j)];
+            cell += add;
+            if (cell >= kMod) cell -= kMod;
         }
     }
 
@@ -139,10 +139,10 @@ std::vector<u64> combine_poly(const std::vector<u64>& a,
         if (x == 0) continue;
         for (int t = 1; t <= k; ++t) {
             const int idx = i - t;
-            tmp[static_cast<std::size_t>(idx)] =
-                (tmp[static_cast<std::size_t>(idx)] +
-                 mod_mul(x, rec[static_cast<std::size_t>(t - 1)])) %
-                kMod;
+            const u64 add = mod_mul(x, rec[static_cast<std::size_t>(t - 1)]);
+            u64& cell = tmp[static_cast<std::size_t>(idx)];
+            cell += add;
+            if (cell >= kMod) cell -= kMod;
         }
     }
 

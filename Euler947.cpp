@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <iostream>
 #include <numeric>
+#include <pthread.h>
 #include <utility>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -73,7 +75,7 @@ std::vector<std::pair<u32, int>> factorize_u32(u32 n, const std::vector<int>& sp
     return factors;
 }
 
-std::vector<u32> divisors_from_factorization(const std::vector<std::pair<u32, int>>& factors) {
+std::vector<u32> divisors_from_factorization(const std::vector<std::pair<u32, int>>& factors, bool sort_result) {
     std::vector<u32> divisors{1};
     for (const auto& [p, e] : factors) {
         const std::size_t current = divisors.size();
@@ -85,7 +87,9 @@ std::vector<u32> divisors_from_factorization(const std::vector<std::pair<u32, in
             }
         }
     }
-    std::sort(divisors.begin(), divisors.end());
+    if (sort_result) {
+        std::sort(divisors.begin(), divisors.end());
+    }
     return divisors;
 }
 
@@ -187,6 +191,37 @@ u32 lcm_u32(u32 a, u32 b) {
     return static_cast<u32>((static_cast<u64>(a) / std::gcd(a, b)) * b);
 }
 
+template <typename Func>
+void for_each_divisor_from_spf(u32 n, const std::vector<int>& spf, Func&& func) {
+    u32 primes[16];
+    int exponents[16];
+    int count = 0;
+    while (n > 1U) {
+        const u32 p = static_cast<u32>(spf[n]);
+        int e = 0;
+        do {
+            n /= p;
+            ++e;
+        } while (n > 1U && static_cast<u32>(spf[n]) == p);
+        primes[count] = p;
+        exponents[count] = e;
+        ++count;
+    }
+
+    auto dfs = [&](auto&& self, int idx, u32 value) -> void {
+        if (idx == count) {
+            func(value);
+            return;
+        }
+        u32 pe = 1U;
+        for (int i = 0; i <= exponents[idx]; ++i) {
+            self(self, idx + 1, value * pe);
+            pe *= primes[idx];
+        }
+    };
+    dfs(dfs, 0, 1U);
+}
+
 class Solver947 {
 public:
     explicit Solver947(u32 max_m)
@@ -204,8 +239,8 @@ public:
     }
 
     u64 s_mod(u32 m) const {
-        std::vector<int> factor_indices;
-        factor_indices.reserve(8);
+        int factor_indices[8];
+        int factor_count = 0;
 
         u32 period_m = 1;
         if (m > 1) {
@@ -220,17 +255,16 @@ public:
 
                 const int idx = pp_index_[q];
                 assert(idx >= 0);
-                factor_indices.push_back(idx);
+                factor_indices[factor_count++] = idx;
                 period_m = lcm_u32(period_m, pp_data_[idx].period);
             }
         }
 
-        const auto divs = divisors_from_factorization(factorize_u32(period_m, spf_));
-
         u64 ans = 0;
-        for (u32 d : divs) {
+        for_each_divisor_from_spf(period_m, spf_, [&](u32 d) {
             u64 fixed = 1ULL;
-            for (int idx : factor_indices) {
+            for (int k = 0; k < factor_count; ++k) {
+                const int idx = factor_indices[k];
                 const auto& data = pp_data_[idx];
                 const u32 g = std::gcd(d, data.period);
                 fixed *= lookup_fixed_count(data, g);
@@ -240,12 +274,71 @@ public:
             term = mul_mod(term, (static_cast<u64>(d) * d) % MOD, MOD);
             term = mul_mod(term, m2_mod_[period_m / d], MOD);
             ans = add_mod(ans, term);
-        }
+        });
 
         return ans;
     }
 
     u64 S_mod(u32 M) const {
+        if (M < 100'000U) {
+            return S_mod_single(M);
+        }
+        long cpu_count = ::sysconf(_SC_NPROCESSORS_ONLN);
+        if (cpu_count <= 1) {
+            return S_mod_single(M);
+        }
+        u32 thread_count = static_cast<u32>(cpu_count);
+        if (thread_count > 16U) {
+            thread_count = 16U;
+        }
+        if (thread_count > M) {
+            thread_count = M;
+        }
+        if (thread_count <= 1U) {
+            return S_mod_single(M);
+        }
+
+        struct Task {
+            const Solver947* solver;
+            u32 begin_m;
+            u32 end_m;
+            u64 partial;
+        };
+
+        auto worker = [](void* arg) -> void* {
+            auto* task = static_cast<Task*>(arg);
+            task->partial = 0ULL;
+            for (u32 m = task->begin_m; m <= task->end_m; ++m) {
+                task->partial = add_mod(task->partial, task->solver->s_mod(m));
+            }
+            return nullptr;
+        };
+
+        std::vector<pthread_t> threads(thread_count);
+        std::vector<Task> tasks(thread_count);
+
+        const u32 base = M / thread_count;
+        const u32 rem = M % thread_count;
+        u32 current = 1U;
+        for (u32 i = 0; i < thread_count; ++i) {
+            const u32 size = base + (i < rem ? 1U : 0U);
+            tasks[i] = Task{this, current, current + size - 1U, 0ULL};
+            current += size;
+            const int rc = ::pthread_create(&threads[i], nullptr, worker, &tasks[i]);
+            assert(rc == 0);
+        }
+
+        u64 total = 0;
+        for (u32 i = 0; i < thread_count; ++i) {
+            const int rc = ::pthread_join(threads[i], nullptr);
+            assert(rc == 0);
+            total = add_mod(total, tasks[i].partial);
+        }
+        return total;
+    }
+
+private:
+    u64 S_mod_single(u32 M) const {
         u64 total = 0;
         for (u32 m = 1; m <= M; ++m) {
             total = add_mod(total, s_mod(m));
@@ -253,7 +346,6 @@ public:
         return total;
     }
 
-private:
     void precompute_period_primes() {
         for (int p : primes_) {
             if (static_cast<u32>(p) > max_m_) {
@@ -294,7 +386,7 @@ private:
                     data.period = period_prime_[p] * static_cast<u32>(pow_u64(p, e - 1));
                 }
 
-                data.period_divisors = divisors_from_factorization(factorize_u32(data.period, spf_));
+                data.period_divisors = divisors_from_factorization(factorize_u32(data.period, spf_), true);
                 data.fixed_counts.reserve(data.period_divisors.size());
                 for (u32 d : data.period_divisors) {
                     data.fixed_counts.push_back(count_fixed_prime_power(p, e, d));

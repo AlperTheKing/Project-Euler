@@ -74,14 +74,14 @@ u32 solve_case(int w, int h) {
     const int ring = steps.max_dx + 1;
 
     std::vector<u32> rows(static_cast<std::size_t>(ring) * static_cast<std::size_t>(row_len), 0);
-    std::vector<u64> acc(static_cast<std::size_t>(row_len), 0);
+    std::vector<u32> acc(static_cast<std::size_t>(row_len), 0U);
 
     auto row_ptr = [&](int ridx) -> u32* {
         return rows.data() + static_cast<std::size_t>(ridx) * static_cast<std::size_t>(row_len);
     };
 
     for (int x = 0; x <= w; ++x) {
-        std::fill(acc.begin(), acc.end(), 0ULL);
+        std::fill(acc.begin(), acc.end(), 0U);
         u32* cur = row_ptr(x % ring);
         std::fill(cur, cur + row_len, 0U);
 
@@ -89,12 +89,16 @@ u32 solve_case(int w, int h) {
             if (dx > x) break;
             const u32* src = row_ptr((x - dx) % ring);
             for (int y = dy; y <= h; ++y) {
-                acc[static_cast<std::size_t>(y)] += src[static_cast<std::size_t>(y - dy)];
+                u32 v = acc[static_cast<std::size_t>(y)] + src[static_cast<std::size_t>(y - dy)];
+                if (v >= kMod) {
+                    v -= kMod;
+                }
+                acc[static_cast<std::size_t>(y)] = v;
             }
         }
 
         for (int y = 0; y <= h; ++y) {
-            u64 val = acc[static_cast<std::size_t>(y)] % kMod;
+            u32 val = acc[static_cast<std::size_t>(y)];
             if (x == 0 && y == 0) {
                 val += 1;
                 if (val >= kMod) val -= kMod;

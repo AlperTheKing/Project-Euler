@@ -7,17 +7,21 @@
 namespace {
 
 using u64 = std::uint64_t;
-using u128 = __uint128_t;
+using u32 = std::uint32_t;
 
 constexpr u64 kMod = 1'000'000'007ULL;
+
+inline u64 mul_mod(const u64 a, const u64 b) {
+    return (a * b) % kMod;
+}
 
 u64 mod_pow(u64 base, u64 exp) {
     u64 result = 1ULL;
     while (exp > 0ULL) {
         if ((exp & 1ULL) != 0ULL) {
-            result = static_cast<u64>((static_cast<u128>(result) * base) % kMod);
+            result = mul_mod(result, base);
         }
-        base = static_cast<u64>((static_cast<u128>(base) * base) % kMod);
+        base = mul_mod(base, base);
         exp >>= 1ULL;
     }
     return result;
@@ -31,9 +35,8 @@ std::pair<u64, u64> fib_pair(const u64 n) {
 
     const u64 two_b = (2ULL * b) % kMod;
     const u64 two_b_minus_a = (two_b + kMod - a) % kMod;
-    const u64 c = static_cast<u64>((static_cast<u128>(a) * two_b_minus_a) % kMod);
-    const u64 d = (static_cast<u64>((static_cast<u128>(a) * a) % kMod) +
-                   static_cast<u64>((static_cast<u128>(b) * b) % kMod)) % kMod;
+    const u64 c = mul_mod(a, two_b_minus_a);
+    const u64 d = (mul_mod(a, a) + mul_mod(b, b)) % kMod;
 
     if ((n & 1ULL) == 0ULL) {
         return {c, d};
@@ -51,24 +54,26 @@ u64 lucas(const u64 n) {
     return value;
 }
 
-void batch_invert(const std::vector<u64>& values, std::vector<u64>& inverses) {
+void batch_invert(const std::vector<u32>& values,
+                  std::vector<u32>& inverses,
+                  std::vector<u32>& prefix) {
     const std::size_t m = values.size();
-    inverses.assign(m, 0ULL);
+    inverses.resize(m);
     if (m == 0U) {
         return;
     }
 
-    std::vector<u64> prefix(m, 0ULL);
+    prefix.resize(m);
     prefix[0] = values[0];
     for (std::size_t i = 1; i < m; ++i) {
-        prefix[i] = static_cast<u64>((static_cast<u128>(prefix[i - 1]) * values[i]) % kMod);
+        prefix[i] = static_cast<u32>(mul_mod(prefix[i - 1], values[i]));
     }
 
     u64 suffix_inv = mod_pow(prefix[m - 1], kMod - 2ULL);
     for (std::size_t i = m; i-- > 0U;) {
         const u64 left = (i == 0U) ? 1ULL : prefix[i - 1U];
-        inverses[i] = static_cast<u64>((static_cast<u128>(suffix_inv) * left) % kMod);
-        suffix_inv = static_cast<u64>((static_cast<u128>(suffix_inv) * values[i]) % kMod);
+        inverses[i] = static_cast<u32>(mul_mod(suffix_inv, left));
+        suffix_inv = mul_mod(suffix_inv, values[i]);
     }
 }
 
@@ -84,9 +89,12 @@ u64 f(const u64 n) {
     u64 answer = 0ULL;
 
     constexpr u64 kBlock = 1'000'000ULL;
-    std::vector<u64> denoms;
-    std::vector<u64> inv_denoms;
+    std::vector<u32> denoms;
+    std::vector<u32> inv_denoms;
+    std::vector<u32> prefix;
     denoms.reserve(kBlock);
+    inv_denoms.reserve(kBlock);
+    prefix.reserve(kBlock);
 
     while (t >= 1ULL) {
         const u64 hi = t;
@@ -100,15 +108,15 @@ u64 f(const u64 n) {
                 denoms[i] = 1ULL;
             } else {
                 const u64 u = r - cur_t + 1ULL;
-                denoms[i] = static_cast<u64>((static_cast<u128>(cur_t % kMod) * (u % kMod)) % kMod);
+                denoms[i] = static_cast<u32>(mul_mod(cur_t % kMod, u % kMod));
             }
         }
-        batch_invert(denoms, inv_denoms);
+        batch_invert(denoms, inv_denoms, prefix);
 
         for (std::size_t i = 0; i < m; ++i) {
             const u64 cur_t = hi - static_cast<u64>(i);
 
-            answer += static_cast<u64>((static_cast<u128>(coeff) * l_t_plus_1) % kMod);
+            answer += mul_mod(coeff, l_t_plus_1);
             if (answer >= kMod) {
                 answer -= kMod;
             }
@@ -119,10 +127,10 @@ u64 f(const u64 n) {
 
             const u64 num_a = cur_t - 1ULL;
             const u64 num_b = 2ULL * r - cur_t;
-            const u64 num = static_cast<u64>((static_cast<u128>(num_a % kMod) * (num_b % kMod)) % kMod);
+            const u64 num = mul_mod(num_a % kMod, num_b % kMod);
 
-            coeff = static_cast<u64>((static_cast<u128>(coeff) * num) % kMod);
-            coeff = static_cast<u64>((static_cast<u128>(coeff) * inv_denoms[i]) % kMod);
+            coeff = mul_mod(coeff, num);
+            coeff = mul_mod(coeff, inv_denoms[i]);
 
             const u64 next_l_t_plus_1 = l_t;
             const u64 next_l_t = (l_t_plus_1 + kMod - l_t) % kMod;

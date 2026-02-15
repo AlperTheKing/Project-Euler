@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -37,7 +38,29 @@ u64 int_root(const u64 n, const int k) {
     return r;
 }
 
-u64 count_nondecreasing(const u64 limit, const u64 min_factor, const int parts) {
+struct Key {
+    u64 limit;
+    u64 min_factor;
+    std::uint16_t parts;
+    bool operator==(const Key& o) const {
+        return limit == o.limit && min_factor == o.min_factor && parts == o.parts;
+    }
+};
+
+struct KeyHash {
+    std::size_t operator()(const Key& k) const {
+        std::size_t h1 = std::hash<u64>{}(k.limit);
+        std::size_t h2 = std::hash<u64>{}(k.min_factor);
+        std::size_t h3 = std::hash<std::uint16_t>{}(k.parts);
+        return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6U) + (h1 >> 2U)) ^
+               (h3 + 0x9e3779b97f4a7c15ULL + (h2 << 6U) + (h2 >> 2U));
+    }
+};
+
+u64 count_nondecreasing(const u64 limit,
+                        const u64 min_factor,
+                        const int parts,
+                        std::unordered_map<Key, u64, KeyHash>& memo) {
     if (parts == 0) {
         return 1ULL;
     }
@@ -48,15 +71,23 @@ u64 count_nondecreasing(const u64 limit, const u64 min_factor, const int parts) 
         return limit - min_factor + 1ULL;
     }
 
+    const Key key{limit, min_factor, static_cast<std::uint16_t>(parts)};
+    const auto it = memo.find(key);
+    if (it != memo.end()) {
+        return it->second;
+    }
+
     const u64 r = int_root(limit, parts);
     if (r < min_factor) {
+        memo.emplace(key, 0ULL);
         return 0ULL;
     }
 
     u64 total = 0ULL;
     for (u64 x = min_factor; x <= r; ++x) {
-        total += count_nondecreasing(limit / x, x, parts - 1);
+        total += count_nondecreasing(limit / x, x, parts - 1, memo);
     }
+    memo.emplace(key, total);
     return total;
 }
 
@@ -69,8 +100,10 @@ u64 D(const u64 N, const u64 K) {
 
     std::vector<u64> counts(static_cast<std::size_t>(max_parts + 1), 0ULL);
     counts[0] = 1ULL;
+    std::unordered_map<Key, u64, KeyHash> memo;
+    memo.reserve(1 << 20);
     for (int m = 1; m <= max_parts; ++m) {
-        counts[static_cast<std::size_t>(m)] = count_nondecreasing(N, 2ULL, m);
+        counts[static_cast<std::size_t>(m)] = count_nondecreasing(N, 2ULL, m, memo);
     }
 
     u64 answer = K % kMod;

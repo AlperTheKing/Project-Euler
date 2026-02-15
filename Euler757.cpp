@@ -1,9 +1,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
-#include <functional>
 #include <iostream>
-#include <queue>
 #include <vector>
 
 namespace {
@@ -44,47 +42,80 @@ u64 count_stealthy(const u64 limit) {
         x_max = x;
     }
 
-    std::vector<u64> y_max(static_cast<std::size_t>(x_max + 1ULL), 0ULL);
-
     struct Node {
         u64 value;
-        u32 x;
+        u64 px;
         u32 y;
+        u32 y_max;
     };
-    auto cmp = [](const Node& lhs, const Node& rhs) { return lhs.value > rhs.value; };
-    std::priority_queue<Node, std::vector<Node>, decltype(cmp)> pq(cmp);
+
+    std::vector<Node> heap;
+    heap.reserve(static_cast<std::size_t>(x_max));
+
+    auto sift_up = [&](std::size_t idx) {
+        while (idx > 0U) {
+            const std::size_t parent = (idx - 1U) >> 1U;
+            if (heap[parent].value <= heap[idx].value) {
+                break;
+            }
+            std::swap(heap[parent], heap[idx]);
+            idx = parent;
+        }
+    };
+
+    auto sift_down = [&](std::size_t idx) {
+        const std::size_t n = heap.size();
+        while (true) {
+            std::size_t left = (idx << 1U) + 1U;
+            if (left >= n) {
+                break;
+            }
+            std::size_t right = left + 1U;
+            std::size_t best = left;
+            if (right < n && heap[right].value < heap[left].value) {
+                best = right;
+            }
+            if (heap[idx].value <= heap[best].value) {
+                break;
+            }
+            std::swap(heap[idx], heap[best]);
+            idx = best;
+        }
+    };
 
     for (u64 x = 1ULL; x <= x_max; ++x) {
-        const u64 max_t = limit / pronic[static_cast<std::size_t>(x)];
+        const u64 px = pronic[static_cast<std::size_t>(x)];
+        const u64 max_t = limit / px;
         const u64 y_lim = max_y_with_pronic_leq(max_t);
         if (y_lim < x) {
             continue;
         }
-        y_max[static_cast<std::size_t>(x)] = y_lim;
-        const u64 value = pronic[static_cast<std::size_t>(x)] * pronic[static_cast<std::size_t>(x)];
-        pq.push(Node{value, static_cast<u32>(x), static_cast<u32>(x)});
+        heap.push_back(Node{px * px, px, static_cast<u32>(x), static_cast<u32>(y_lim)});
+        sift_up(heap.size() - 1U);
     }
 
     u64 count = 0ULL;
-    u64 last = 0ULL;
-    bool has_last = false;
+    u64 last = static_cast<u64>(-1);
 
-    while (!pq.empty()) {
-        const Node cur = pq.top();
-        pq.pop();
+    while (!heap.empty()) {
+        Node cur = heap[0];
 
-        if (!has_last || cur.value != last) {
+        if (cur.value != last) {
             ++count;
             last = cur.value;
-            has_last = true;
         }
 
-        const u64 x = static_cast<u64>(cur.x);
-        const u64 y_next = static_cast<u64>(cur.y) + 1ULL;
-        if (y_next <= y_max[static_cast<std::size_t>(x)]) {
-            const u64 value =
-                pronic[static_cast<std::size_t>(x)] * pronic[static_cast<std::size_t>(y_next)];
-            pq.push(Node{value, cur.x, static_cast<u32>(y_next)});
+        if (cur.y < cur.y_max) {
+            ++cur.y;
+            cur.value = cur.px * pronic[static_cast<std::size_t>(cur.y)];
+            heap[0] = cur;
+            sift_down(0U);
+        } else {
+            heap[0] = heap.back();
+            heap.pop_back();
+            if (!heap.empty()) {
+                sift_down(0U);
+            }
         }
     }
 

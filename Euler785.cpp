@@ -5,11 +5,14 @@
 #include <cstdint>
 #include <iostream>
 #include <numeric>
+#include <pthread.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 using i64 = long long;
 using i128 = __int128_t;
+using ResidueTable = std::array<std::array<std::vector<int>, 304>, 8>;
 
 static std::string to_string_i128(i128 x) {
     if (x == 0) {
@@ -59,8 +62,8 @@ static int trailing_zeros_mod16(int x_mod16) {
     return c;
 }
 
-static std::array<std::array<std::vector<int>, 304>, 8> build_residue_table() {
-    std::array<std::array<std::vector<int>, 304>, 8> table;
+static ResidueTable build_residue_table() {
+    ResidueTable table;
 
     for (int vm = 0; vm < 304; ++vm) {
         for (int um = 0; um < 304; ++um) {
@@ -86,26 +89,23 @@ static std::array<std::array<std::vector<int>, 304>, 8> build_residue_table() {
     return table;
 }
 
-static i128 solve_fast(i64 N) {
-    constexpr std::array<int, 8> G = {1, 4, 16, 19, 64, 76, 304, 1216};
+static const ResidueTable& get_residue_table() {
+    static const ResidueTable table = build_residue_table();
+    return table;
+}
 
-    const auto residue_table = build_residue_table();
+static i128 accumulate_stride(i64 N, const std::array<int, 8>& vmax, int tid, int step) {
+    constexpr std::array<int, 8> G = {1, 4, 16, 19, 64, 76, 304, 1216};
+    const auto& residue_table = get_residue_table();
 
     const long double lo = 5.0L / 3.0L;
     const long double hi = (103.0L - 4.0L * std::sqrt(19.0L)) / 45.0L;
-    const long double cmin = 32.0L * hi * hi - 176.0L * hi + 240.0L;
-
-    std::array<int, 8> vmax{};
-    for (int i = 0; i < 8; ++i) {
-        const long double lim = std::sqrt((static_cast<long double>(N) * static_cast<long double>(G[i])) / cmin);
-        vmax[i] = static_cast<int>(std::floor(lim)) + 3;
-    }
 
     i128 ans = 0;
 
     for (int ci = 0; ci < 8; ++ci) {
         const int g = G[ci];
-        for (int v = 1; v <= vmax[ci]; ++v) {
+        for (int v = tid + 1; v <= vmax[ci]; v += step) {
             const i64 umin = static_cast<i64>(std::floor(lo * static_cast<long double>(v))) + 1;
             const i64 umax = static_cast<i64>(std::floor(hi * static_cast<long double>(v)));
             if (umin > umax) {
@@ -144,6 +144,61 @@ static i128 solve_fast(i64 N) {
         }
     }
 
+    return ans;
+}
+
+struct ThreadTask785 {
+    i64 N = 0;
+    std::array<int, 8> vmax{};
+    int tid = 0;
+    int step = 1;
+    i128 partial = 0;
+};
+
+static void* thread_worker_785(void* arg) {
+    auto* t = static_cast<ThreadTask785*>(arg);
+    t->partial = accumulate_stride(t->N, t->vmax, t->tid, t->step);
+    return nullptr;
+}
+
+static i128 solve_fast(i64 N) {
+    constexpr std::array<int, 8> G = {1, 4, 16, 19, 64, 76, 304, 1216};
+    const long double hi = (103.0L - 4.0L * std::sqrt(19.0L)) / 45.0L;
+    const long double cmin = 32.0L * hi * hi - 176.0L * hi + 240.0L;
+
+    std::array<int, 8> vmax{};
+    for (int i = 0; i < 8; ++i) {
+        const long double lim = std::sqrt((static_cast<long double>(N) * static_cast<long double>(G[i])) / cmin);
+        vmax[i] = static_cast<int>(std::floor(lim)) + 3;
+    }
+
+    long cpu_count = ::sysconf(_SC_NPROCESSORS_ONLN);
+    int thread_count = (cpu_count > 1 ? static_cast<int>(cpu_count) : 1);
+    if (thread_count > 16) {
+        thread_count = 16;
+    }
+    if (N < 1'000'000LL || thread_count <= 1) {
+        return accumulate_stride(N, vmax, 0, 1);
+    }
+
+    std::vector<pthread_t> threads((std::size_t)thread_count);
+    std::vector<ThreadTask785> tasks((std::size_t)thread_count);
+
+    for (int t = 0; t < thread_count; ++t) {
+        tasks[(std::size_t)t].N = N;
+        tasks[(std::size_t)t].vmax = vmax;
+        tasks[(std::size_t)t].tid = t;
+        tasks[(std::size_t)t].step = thread_count;
+        const int rc = ::pthread_create(&threads[(std::size_t)t], nullptr, thread_worker_785, &tasks[(std::size_t)t]);
+        assert(rc == 0);
+    }
+
+    i128 ans = 0;
+    for (int t = 0; t < thread_count; ++t) {
+        const int rc = ::pthread_join(threads[(std::size_t)t], nullptr);
+        assert(rc == 0);
+        ans += tasks[(std::size_t)t].partial;
+    }
     return ans;
 }
 

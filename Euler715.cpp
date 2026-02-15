@@ -14,6 +14,7 @@ namespace {
 
 using i64 = long long;
 using i128 = __int128_t;
+using u64 = std::uint64_t;
 
 constexpr i64 kMod = 1'000'000'007LL;
 constexpr i64 kDefaultN = 1'000'000'000'000LL;
@@ -73,7 +74,7 @@ inline i64 mod_add(i64 a, i64 b) {
 }
 
 inline i64 mod_mul(i64 a, i64 b) {
-    return static_cast<i64>((static_cast<i128>(a) * b) % kMod);
+    return static_cast<i64>((static_cast<u64>(a) * static_cast<u64>(b)) % static_cast<u64>(kMod));
 }
 
 std::vector<int> sieve_primes(const int n) {

@@ -1,8 +1,11 @@
+#include <pthread.h>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <numeric>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -51,28 +54,33 @@ bool parse_arguments(int argc, char** argv, Options& options) {
     return options.limit >= 3;
 }
 
-i64 extended_gcd(i64 a, i64 b, i64& x, i64& y) {
-    if (a == 0) {
-        x = 0;
-        y = 1;
-        return b;
-    }
+u32 mod_inverse(u32 a, u32 mod) {
+    i64 x0 = 1;
+    i64 y0 = 0;
     i64 x1 = 0;
-    i64 y1 = 0;
-    const i64 g = extended_gcd(b % a, a, x1, y1);
-    x = y1 - (b / a) * x1;
-    y = x1;
-    return g;
-}
+    i64 y1 = 1;
+    i64 aa = static_cast<i64>(a);
+    i64 mm = static_cast<i64>(mod);
 
-u32 mod_inverse(const u32 a, const u32 mod) {
-    i64 x = 0;
-    i64 y = 0;
-    const i64 g = extended_gcd(static_cast<i64>(a), static_cast<i64>(mod), x, y);
-    if (g != 1) {
+    while (mm != 0) {
+        const i64 q = aa / mm;
+        const i64 aa2 = aa - q * mm;
+        aa = mm;
+        mm = aa2;
+
+        const i64 nx = x0 - q * x1;
+        x0 = x1;
+        x1 = nx;
+
+        const i64 ny = y0 - q * y1;
+        y0 = y1;
+        y1 = ny;
+    }
+
+    if (aa != 1) {
         return 0U;
     }
-    i64 v = x % static_cast<i64>(mod);
+    i64 v = x0 % static_cast<i64>(mod);
     if (v < 0) {
         v += static_cast<i64>(mod);
     }
@@ -97,92 +105,152 @@ std::vector<int> build_spf(const int limit) {
     return spf;
 }
 
-void roots_for_prime_power(const int prime, const int exponent, std::vector<u32>& roots, u32& modulus) {
-    modulus = 1U;
-    for (int i = 0; i < exponent; ++i) {
-        modulus *= static_cast<u32>(prime);
-    }
-
-    roots.clear();
-    if (prime == 2) {
-        if (exponent == 1) {
-            roots.push_back(1U);
-        } else if (exponent == 2) {
-            roots.push_back(1U);
-            roots.push_back(3U);
-        } else {
-            const u32 half = 1U << static_cast<u32>(exponent - 1);
-            roots.push_back(1U);
-            roots.push_back(modulus - 1U);
-            roots.push_back(1U + half);
-            roots.push_back(modulus - 1U - half);
-        }
-    } else {
-        roots.push_back(1U);
-        roots.push_back(modulus - 1U);
-    }
-    std::sort(roots.begin(), roots.end());
-    roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
-}
-
 u32 compute_I(const int n, const std::vector<int>& spf) {
-    int value = n;
-    std::vector<std::pair<u32, std::vector<u32>>> blocks;
-    blocks.reserve(8);
-
-    while (value > 1) {
-        const int p = spf[static_cast<std::size_t>(value)];
-        int exp = 0;
-        while (value % p == 0) {
-            value /= p;
-            ++exp;
-        }
-        u32 modulus = 0U;
-        std::vector<u32> roots;
-        roots_for_prime_power(p, exp, roots, modulus);
-        blocks.push_back({modulus, std::move(roots)});
-    }
-
-    std::vector<u32> solutions;
-    solutions.reserve(32);
-    solutions.push_back(0U);
-    u32 current_modulus = 1U;
-
-    for (const auto& block : blocks) {
-        const u32 component_mod = block.first;
-        const std::vector<u32>& roots = block.second;
-        const u32 inv = mod_inverse(current_modulus % component_mod, component_mod);
-
-        std::vector<u32> next;
-        next.reserve(solutions.size() * roots.size());
-        for (const u32 x : solutions) {
-            const u32 x_mod = x % component_mod;
-            for (const u32 r : roots) {
-                const u32 delta = (r >= x_mod) ? (r - x_mod) : (r + component_mod - x_mod);
-                const u32 t = static_cast<u32>((static_cast<u64>(delta) * inv) % component_mod);
-                const u32 candidate = x + current_modulus * t;
-                next.push_back(candidate);
-            }
-        }
-        solutions.swap(next);
-        current_modulus *= component_mod;
-    }
-
-    u32 best = 1U;
+    std::array<u32, 256> sums{};
     const u32 target = static_cast<u32>(n - 1);
-    for (const u32 x : solutions) {
-        if (x < target && x > best) {
-            best = x;
+    sums[0] = target;
+    int count = 1;
+    u32 best = 1U;
+
+    auto push = [&](u32 s) {
+        sums[static_cast<std::size_t>(count++)] = s;
+        if (s > best && s < target) {
+            best = s;
+        }
+    };
+
+    int nn = n;
+    while (nn != 1) {
+        const int p = spf[static_cast<std::size_t>(nn)];
+        u32 q = 1U;
+        do {
+            nn /= p;
+            q *= static_cast<u32>(p);
+        } while (nn % p == 0);
+
+        if (q == 2U) {
+            continue;
+        }
+
+        const u32 m = static_cast<u32>(n / static_cast<int>(q));
+        const u32 inv = mod_inverse(m % q, q);
+        const u32 b = static_cast<u32>((static_cast<u64>(m) * inv) % static_cast<u64>(n));
+        const u32 delta2 = static_cast<u32>((2ULL * b) % static_cast<u64>(n));
+        u32 delta_half = 0U;
+        u32 delta_half_plus_two = 0U;
+        if ((q & 1U) == 0U && q >= 8U) {
+            const u32 half = q / 2U;
+            delta_half = static_cast<u32>((static_cast<u64>(half) * b) % static_cast<u64>(n));
+            delta_half_plus_two =
+                static_cast<u32>((static_cast<u64>(half + 2U) * b) % static_cast<u64>(n));
+        }
+
+        const int current_count = count;
+        for (int j = 0; j < current_count; ++j) {
+            const u32 base = sums[static_cast<std::size_t>(j)];
+
+            u32 s = base + delta2;
+            if (s >= static_cast<u32>(n)) {
+                s -= static_cast<u32>(n);
+            }
+            push(s);
+
+            if ((q & 1U) == 0U && q >= 8U) {
+                u32 s1 = base + delta_half;
+                if (s1 >= static_cast<u32>(n)) {
+                    s1 -= static_cast<u32>(n);
+                }
+                push(s1);
+
+                u32 s2 = base + delta_half_plus_two;
+                if (s2 >= static_cast<u32>(n)) {
+                    s2 -= static_cast<u32>(n);
+                }
+                push(s2);
+            }
         }
     }
     return best;
 }
 
+u64 solve_range(const std::vector<int>& spf, const int begin, const int end) {
+    u64 sum = 0ULL;
+    for (int n = begin; n <= end; ++n) {
+        sum += compute_I(n, spf);
+    }
+    return sum;
+}
+
+struct WorkerTask {
+    const std::vector<int>* spf = nullptr;
+    int begin = 0;
+    int end = -1;
+    u64 partial = 0ULL;
+};
+
+void* worker_entry(void* raw) {
+    auto* task = static_cast<WorkerTask*>(raw);
+    task->partial = solve_range(*task->spf, task->begin, task->end);
+    return nullptr;
+}
+
+int detect_thread_count(const int work_items) {
+    long cores = ::sysconf(_SC_NPROCESSORS_ONLN);
+    int threads = (cores > 0) ? static_cast<int>(cores) : 4;
+    if (threads < 1) {
+        threads = 1;
+    }
+    if (threads > work_items) {
+        threads = work_items;
+    }
+    return threads;
+}
+
 u64 solve(const int limit) {
     const std::vector<int> spf = build_spf(limit);
+    const int begin = 3;
+    if (limit < begin) {
+        return 0ULL;
+    }
+    const int work_items = limit - begin + 1;
+    const int threads = detect_thread_count(work_items);
+    if (threads == 1) {
+        return solve_range(spf, begin, limit);
+    }
+
+    std::vector<pthread_t> handles(static_cast<std::size_t>(threads));
+    std::vector<WorkerTask> tasks(static_cast<std::size_t>(threads));
+    std::vector<char> launched(static_cast<std::size_t>(threads), 0);
+
+    const int chunk = (work_items + threads - 1) / threads;
+    int start = begin;
+    for (int t = 0; t < threads; ++t) {
+        if (start > limit) {
+            tasks[static_cast<std::size_t>(t)].partial = 0ULL;
+            continue;
+        }
+        const int end = std::min(limit, start + chunk - 1);
+        auto& task = tasks[static_cast<std::size_t>(t)];
+        task.spf = &spf;
+        task.begin = start;
+        task.end = end;
+        task.partial = 0ULL;
+
+        const int rc = pthread_create(&handles[static_cast<std::size_t>(t)], nullptr, worker_entry, &task);
+        if (rc == 0) {
+            launched[static_cast<std::size_t>(t)] = 1;
+        } else {
+            task.partial = solve_range(spf, start, end);
+        }
+        start = end + 1;
+    }
+
     u64 sum = 0ULL;
-    for (int n = 3; n <= limit; ++n) {
-        sum += compute_I(n, spf);
+    for (int t = 0; t < threads; ++t) {
+        if (launched[static_cast<std::size_t>(t)] != 0) {
+            pthread_join(handles[static_cast<std::size_t>(t)], nullptr);
+        }
+        sum += tasks[static_cast<std::size_t>(t)].partial;
     }
     return sum;
 }

@@ -1,18 +1,19 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <pthread.h>
+#include <unistd.h>
 #include <vector>
 
 namespace {
 
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
-using u128 = __uint128_t;
 
 constexpr u64 kMod = 1'000'000'007ULL;
 
 u64 mod_mul(u64 a, u64 b) {
-    return static_cast<u64>((static_cast<u128>(a) * static_cast<u128>(b)) % kMod);
+    return (a * b) % kMod;
 }
 
 u64 mod_pow(u64 base, u64 exp) {
@@ -46,10 +47,9 @@ u64 solve_case(int k, u64 n) {
         return mod_mul(num, inv[static_cast<std::size_t>(r - 1)]);
     };
 
-    u64 answer = 0;
-
     u64 A_next = static_cast<u64>(k) % kMod;         // A_{k-1}
     u64 C_curr = static_cast<u64>(k + 1) % kMod;     // C(k+1, k)
+    std::vector<u32> coeff(static_cast<std::size_t>(k), 0U);
 
     for (int r = k - 1; r >= 0; --r) {
         u64 A = 0;
@@ -61,8 +61,7 @@ u64 solve_case(int k, u64 n) {
             A = (mod_mul(2, A_next) + signed_C + kMod - 1) % kMod;
             A_next = A;
         }
-
-        answer = (answer + mod_mul(A, geometric_sum(r))) % kMod;
+        coeff[static_cast<std::size_t>(r)] = static_cast<u32>(A);
 
         if (r > 0) {
             C_curr = mod_mul(C_curr, static_cast<u64>(r + 1));
@@ -70,6 +69,91 @@ u64 solve_case(int k, u64 n) {
         }
     }
 
+    struct Task {
+        int lo = 0;
+        int hi = 0;
+        u64 exp = 0;
+        u64 n1 = 0;
+        const std::vector<u32>* coeff = nullptr;
+        const std::vector<u32>* inv = nullptr;
+        u64 partial = 0;
+    };
+
+    auto worker = [](void* raw) -> void* {
+        auto* t = static_cast<Task*>(raw);
+        u64 sum = 0;
+        for (int r = t->lo; r < t->hi; ++r) {
+            u64 g = 0;
+            if (r == 0) {
+                g = 1;
+            } else if (r == 1) {
+                g = t->n1;
+            } else {
+                const u64 p = mod_pow(static_cast<u64>(r), t->exp);
+                const u64 num = (p + kMod - 1) % kMod;
+                g = mod_mul(num, (*t->inv)[static_cast<std::size_t>(r - 1)]);
+            }
+            sum += mod_mul((*t->coeff)[static_cast<std::size_t>(r)], g);
+            if (sum >= kMod) {
+                sum -= kMod;
+            }
+        }
+        t->partial = sum;
+        return nullptr;
+    };
+
+    long cpu_count = ::sysconf(_SC_NPROCESSORS_ONLN);
+    int thread_count = (cpu_count > 1) ? static_cast<int>(cpu_count) : 1;
+    if (thread_count > 16) {
+        thread_count = 16;
+    }
+    if (thread_count > k) {
+        thread_count = k;
+    }
+    if (k < 200'000) {
+        thread_count = 1;
+    }
+
+    if (thread_count <= 1) {
+        Task task;
+        task.lo = 0;
+        task.hi = k;
+        task.exp = exp;
+        task.n1 = n1;
+        task.coeff = &coeff;
+        task.inv = &inv;
+        worker(&task);
+        return task.partial;
+    }
+
+    std::vector<pthread_t> tids(static_cast<std::size_t>(thread_count));
+    std::vector<Task> tasks(static_cast<std::size_t>(thread_count));
+
+    const int base = k / thread_count;
+    const int rem = k % thread_count;
+    int cur = 0;
+    for (int t = 0; t < thread_count; ++t) {
+        const int len = base + (t < rem ? 1 : 0);
+        tasks[static_cast<std::size_t>(t)].lo = cur;
+        tasks[static_cast<std::size_t>(t)].hi = cur + len;
+        tasks[static_cast<std::size_t>(t)].exp = exp;
+        tasks[static_cast<std::size_t>(t)].n1 = n1;
+        tasks[static_cast<std::size_t>(t)].coeff = &coeff;
+        tasks[static_cast<std::size_t>(t)].inv = &inv;
+        cur += len;
+        const int rc = ::pthread_create(&tids[static_cast<std::size_t>(t)], nullptr, worker, &tasks[static_cast<std::size_t>(t)]);
+        assert(rc == 0);
+    }
+
+    u64 answer = 0;
+    for (int t = 0; t < thread_count; ++t) {
+        const int rc = ::pthread_join(tids[static_cast<std::size_t>(t)], nullptr);
+        assert(rc == 0);
+        answer += tasks[static_cast<std::size_t>(t)].partial;
+        if (answer >= kMod) {
+            answer -= kMod;
+        }
+    }
     return answer;
 }
 

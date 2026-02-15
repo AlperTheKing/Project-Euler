@@ -6,20 +6,9 @@
 namespace {
 
 using u64 = std::uint64_t;
+using u32 = std::uint32_t;
 
 constexpr u64 kMod = 1'020'202'009ULL;
-
-u64 mod_pow(u64 a, u64 e) {
-    u64 r = 1ULL;
-    while (e > 0ULL) {
-        if (e & 1ULL) {
-            r = static_cast<u64>((static_cast<unsigned __int128>(r) * a) % kMod);
-        }
-        a = static_cast<u64>((static_cast<unsigned __int128>(a) * a) % kMod);
-        e >>= 1ULL;
-    }
-    return r;
-}
 
 u64 f_bruteforce(const int n) {
     std::vector<std::vector<u64>> comb(static_cast<std::size_t>(n + 1),
@@ -60,66 +49,26 @@ u64 f_bruteforce(const int n) {
 }
 
 u64 solve(const int n) {
-    std::vector<u64> fact(static_cast<std::size_t>(n + 1), 1ULL);
-    std::vector<u64> inv_fact(static_cast<std::size_t>(n + 1), 1ULL);
-
-    for (int i = 1; i <= n; ++i) {
-        fact[static_cast<std::size_t>(i)] =
-            static_cast<u64>((static_cast<unsigned __int128>(
-                                  fact[static_cast<std::size_t>(i - 1)]) *
-                              static_cast<u64>(i)) %
-                             kMod);
+    if (n == 0) {
+        return 1ULL;
     }
-    inv_fact[static_cast<std::size_t>(n)] = mod_pow(fact[static_cast<std::size_t>(n)], kMod - 2ULL);
-    for (int i = n; i >= 1; --i) {
-        inv_fact[static_cast<std::size_t>(i - 1)] =
-            static_cast<u64>((static_cast<unsigned __int128>(
-                                  inv_fact[static_cast<std::size_t>(i)]) *
-                              static_cast<u64>(i)) %
-                             kMod);
-    }
+    std::vector<u32> prev(static_cast<std::size_t>(n + 1), 0U);
+    std::vector<u32> curr(static_cast<std::size_t>(n + 1), 0U);
+    prev[0] = 1U;
 
-    auto binom = [&](const int a, const int b) -> u64 {
-        if (b < 0 || b > a) {
-            return 0ULL;
-        }
-        u64 v = fact[static_cast<std::size_t>(a)];
-        v = static_cast<u64>((static_cast<unsigned __int128>(v) *
-                              inv_fact[static_cast<std::size_t>(b)]) %
-                             kMod);
-        v = static_cast<u64>((static_cast<unsigned __int128>(v) *
-                              inv_fact[static_cast<std::size_t>(a - b)]) %
-                             kMod);
-        return v;
-    };
-
-    const u64 inv2 = (kMod + 1ULL) / 2ULL;
-    std::vector<u64> E(static_cast<std::size_t>(n + 1), 0ULL);
-    E[0] = 1ULL;
-    if (n >= 1) {
-        E[1] = 1ULL;
-    }
-
-    for (int m = 1; m < n; ++m) {
-        u64 sum = 0ULL;
-        for (int k = 0; k <= m; ++k) {
-            u64 term = binom(m, k);
-            term = static_cast<u64>((static_cast<unsigned __int128>(term) *
-                                     E[static_cast<std::size_t>(k)]) %
-                                    kMod);
-            term = static_cast<u64>((static_cast<unsigned __int128>(term) *
-                                     E[static_cast<std::size_t>(m - k)]) %
-                                    kMod);
-            sum += term;
-            if (sum >= kMod) {
-                sum -= kMod;
+    for (int row = 1; row <= n; ++row) {
+        curr[0] = 0U;
+        for (int k = 1; k <= row; ++k) {
+            u32 v = curr[static_cast<std::size_t>(k - 1)] +
+                    prev[static_cast<std::size_t>(row - k)];
+            if (v >= kMod) {
+                v -= static_cast<u32>(kMod);
             }
+            curr[static_cast<std::size_t>(k)] = v;
         }
-        E[static_cast<std::size_t>(m + 1)] =
-            static_cast<u64>((static_cast<unsigned __int128>(sum) * inv2) % kMod);
+        std::swap(prev, curr);
     }
-
-    return E[static_cast<std::size_t>(n)];
+    return prev[static_cast<std::size_t>(n)];
 }
 
 }  // namespace

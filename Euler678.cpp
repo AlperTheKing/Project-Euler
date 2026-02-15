@@ -1,9 +1,12 @@
+#include <pthread.h>
 #include <bit>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <unordered_map>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -17,6 +20,63 @@ struct Entry {
     int c;
     int f;
 };
+
+int detect_thread_count(std::size_t work_items) {
+    long cores = ::sysconf(_SC_NPROCESSORS_ONLN);
+    int threads = (cores > 0) ? static_cast<int>(cores) : 4;
+    if (threads < 1) threads = 1;
+    if (threads > 4) threads = 4;
+    if (work_items > 0 && static_cast<std::size_t>(threads) > work_items) {
+        threads = static_cast<int>(work_items);
+    }
+    return threads;
+}
+
+struct EWorkerTask {
+    const std::vector<u64>* pw = nullptr;
+    const std::vector<int>* amax_by_b = nullptr;
+    const std::unordered_map<u64, u64>* perfect_mask = nullptr;
+    u64 mask_filter = 0ULL;
+    bool even_e = false;
+    std::atomic<int>* next_b = nullptr;
+    int max_b = 0;
+    u64 partial = 0ULL;
+};
+
+void* e_worker_entry(void* raw) {
+    auto* task = static_cast<EWorkerTask*>(raw);
+    u64 local = 0ULL;
+
+    while (true) {
+        const int b = task->next_b->fetch_add(1, std::memory_order_relaxed);
+        if (b > task->max_b) break;
+
+        const int amax = (*task->amax_by_b)[static_cast<std::size_t>(b)];
+        if (amax <= 0) continue;
+
+        const u64 pb = (*task->pw)[static_cast<std::size_t>(b)];
+        if (task->even_e && ((b & 1) != 0)) {
+            for (int a = 2; a <= amax; a += 2) {
+                const u64 s = pb + (*task->pw)[static_cast<std::size_t>(a)];
+                const auto it = task->perfect_mask->find(s);
+                if (it != task->perfect_mask->end()) {
+                    local += static_cast<u64>(std::popcount(it->second & task->mask_filter));
+                }
+            }
+        } else {
+            for (int a = 1; a <= amax; ++a) {
+                const u64 s = pb + (*task->pw)[static_cast<std::size_t>(a)];
+                const auto it = task->perfect_mask->find(s);
+                if (it != task->perfect_mask->end()) {
+                    local += static_cast<u64>(std::popcount(it->second & task->mask_filter));
+                }
+            }
+        }
+    }
+
+    task->partial = local;
+    return nullptr;
+}
 
 u64 pow_limit(u64 base, int exp, u64 limit) {
     u128 v = 1;
@@ -273,37 +333,62 @@ u64 solve(u64 n) {
         const bool even_e = ((e & 1) == 0);
         const u64 mask_filter = filter[static_cast<std::size_t>(e)];
 
+        std::vector<int> amax_by_b(static_cast<std::size_t>(max_b + 1), 0);
         int amax_limit = max_b;
         for (int b = 2; b <= max_b; ++b) {
             const u64 pb = pw[static_cast<std::size_t>(b)];
             while (amax_limit > 0 && pw[static_cast<std::size_t>(amax_limit)] > n - pb) {
                 --amax_limit;
             }
-
             int amax = amax_limit;
-            if (amax >= b) {
-                amax = b - 1;
-            }
-            if (amax <= 0) {
-                continue;
-            }
+            if (amax >= b) amax = b - 1;
+            amax_by_b[static_cast<std::size_t>(b)] = amax;
+        }
 
-            if (even_e && ((b & 1) != 0)) {
-                for (int a = 2; a <= amax; a += 2) {
-                    const u64 s = pb + pw[static_cast<std::size_t>(a)];
-                    const auto it = perfect_mask.find(s);
-                    if (it != perfect_mask.end()) {
-                        ans += static_cast<u64>(std::popcount(it->second & mask_filter));
+        const int threads = detect_thread_count(static_cast<std::size_t>(max_b - 1));
+        if (threads <= 1 || max_b < 3000) {
+            for (int b = 2; b <= max_b; ++b) {
+                const int amax = amax_by_b[static_cast<std::size_t>(b)];
+                if (amax <= 0) continue;
+                const u64 pb = pw[static_cast<std::size_t>(b)];
+                if (even_e && ((b & 1) != 0)) {
+                    for (int a = 2; a <= amax; a += 2) {
+                        const u64 s = pb + pw[static_cast<std::size_t>(a)];
+                        const auto it = perfect_mask.find(s);
+                        if (it != perfect_mask.end()) {
+                            ans += static_cast<u64>(std::popcount(it->second & mask_filter));
+                        }
+                    }
+                } else {
+                    for (int a = 1; a <= amax; ++a) {
+                        const u64 s = pb + pw[static_cast<std::size_t>(a)];
+                        const auto it = perfect_mask.find(s);
+                        if (it != perfect_mask.end()) {
+                            ans += static_cast<u64>(std::popcount(it->second & mask_filter));
+                        }
                     }
                 }
-            } else {
-                for (int a = 1; a <= amax; ++a) {
-                    const u64 s = pb + pw[static_cast<std::size_t>(a)];
-                    const auto it = perfect_mask.find(s);
-                    if (it != perfect_mask.end()) {
-                        ans += static_cast<u64>(std::popcount(it->second & mask_filter));
-                    }
-                }
+            }
+        } else {
+            std::vector<pthread_t> handles(static_cast<std::size_t>(threads));
+            std::vector<EWorkerTask> tasks(static_cast<std::size_t>(threads));
+            std::atomic<int> next_b{2};
+
+            for (int t = 0; t < threads; ++t) {
+                auto& task = tasks[static_cast<std::size_t>(t)];
+                task.pw = &pw;
+                task.amax_by_b = &amax_by_b;
+                task.perfect_mask = &perfect_mask;
+                task.mask_filter = mask_filter;
+                task.even_e = even_e;
+                task.next_b = &next_b;
+                task.max_b = max_b;
+                task.partial = 0ULL;
+                pthread_create(&handles[static_cast<std::size_t>(t)], nullptr, e_worker_entry, &task);
+            }
+            for (int t = 0; t < threads; ++t) {
+                pthread_join(handles[static_cast<std::size_t>(t)], nullptr);
+                ans += tasks[static_cast<std::size_t>(t)].partial;
             }
         }
     }

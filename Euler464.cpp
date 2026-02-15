@@ -7,42 +7,35 @@
 namespace {
 
 using i64 = std::int64_t;
-using u64 = std::uint64_t;
 
 struct Options {
     int n = 20'000'000;
     bool run_checkpoints = true;
 };
 
-struct Point {
-    int x = 0;
-    int y = 0;
-    int w = 0;
-};
-
 class Fenwick {
 public:
-    explicit Fenwick(int n) : tree_(static_cast<std::size_t>(n + 1), 0LL) {}
+    explicit Fenwick(const int n) : bit_(static_cast<std::size_t>(n + 1), 0) {}
 
-    void add(int idx, const i64 delta) {
-        const int n = static_cast<int>(tree_.size()) - 1;
+    void add(int idx, const int delta) {
+        const int n = static_cast<int>(bit_.size()) - 1;
         while (idx <= n) {
-            tree_[static_cast<std::size_t>(idx)] += delta;
+            bit_[static_cast<std::size_t>(idx)] += delta;
             idx += idx & -idx;
         }
     }
 
-    i64 sum(int idx) const {
-        i64 result = 0;
+    int sum(int idx) const {
+        int result = 0;
         while (idx > 0) {
-            result += tree_[static_cast<std::size_t>(idx)];
+            result += bit_[static_cast<std::size_t>(idx)];
             idx -= idx & -idx;
         }
         return result;
     }
 
 private:
-    std::vector<i64> tree_;
+    std::vector<int> bit_;
 };
 
 bool parse_int_after_prefix(const std::string& arg, const std::string& prefix, int& out) {
@@ -111,124 +104,60 @@ std::vector<std::int8_t> mobius_values(const int n) {
     return mu;
 }
 
-std::vector<Point> build_compressed_points(const std::vector<std::int8_t>& mu, int& y_shift, int& y_max) {
-    std::vector<Point> points;
-    points.reserve(mu.size());
-    points.push_back(Point{0, 0, 1});  // prefix 0
+i64 count_positive_weighted_segments(
+    const std::vector<std::int8_t>& mu,
+    const int weight_pos,
+    const int weight_neg) {
+    const int n = static_cast<int>(mu.size()) - 1;
+    std::vector<int> prefix(static_cast<std::size_t>(n + 1), 0);
 
-    int q = 0;
-    int m = 0;
-    int min_y = 0;
-    int max_y = 0;
-
-    for (int i = 1; i < static_cast<int>(mu.size()); ++i) {
-        const int v = static_cast<int>(mu[static_cast<std::size_t>(i)]);
-        if (v == 0) {
-            ++points.back().w;
-            continue;
-        }
-
-        ++q;
-        m += v;
-        const int x = q - 199 * m;
-        const int y = q + 199 * m;
-
-        if (y < min_y) {
-            min_y = y;
-        }
-        if (y > max_y) {
-            max_y = y;
-        }
-
-        points.push_back(Point{x, y, 1});
+    int cur = 0;
+    int min_prefix = 0;
+    int max_prefix = 0;
+    for (int i = 1; i <= n; ++i) {
+        const int m = static_cast<int>(mu[static_cast<std::size_t>(i)]);
+        if (m == 1) cur += weight_pos;
+        if (m == -1) cur += weight_neg;
+        prefix[static_cast<std::size_t>(i)] = cur;
+        if (cur < min_prefix) min_prefix = cur;
+        if (cur > max_prefix) max_prefix = cur;
     }
 
-    y_shift = 1 - min_y;
-    y_max = max_y + y_shift + 2;
-    for (Point& p : points) {
-        p.y += y_shift;
+    const i64 span = static_cast<i64>(max_prefix) - static_cast<i64>(min_prefix) + 1LL;
+    constexpr i64 DENSE_LIMIT = 50'000'000LL;
+
+    i64 positives = 0;
+    if (span <= DENSE_LIMIT) {
+        Fenwick bit(static_cast<int>(span) + 2);
+        for (int i = 0; i <= n; ++i) {
+            const int idx = prefix[static_cast<std::size_t>(i)] - min_prefix + 1;
+            positives += static_cast<i64>(bit.sum(idx - 1));
+            bit.add(idx, 1);
+        }
+        return positives;
     }
-    return points;
+
+    std::vector<int> coords = prefix;
+    std::sort(coords.begin(), coords.end());
+    coords.erase(std::unique(coords.begin(), coords.end()), coords.end());
+
+    Fenwick bit(static_cast<int>(coords.size()) + 2);
+    for (int i = 0; i <= n; ++i) {
+        const int v = prefix[static_cast<std::size_t>(i)];
+        const int idx = static_cast<int>(
+            std::lower_bound(coords.begin(), coords.end(), v) - coords.begin()) + 1;
+        positives += static_cast<i64>(bit.sum(idx - 1));
+        bit.add(idx, 1);
+    }
+    return positives;
 }
-
-class CDQCounter {
-public:
-    CDQCounter(std::vector<Point> points, const int fenwick_size)
-        : points_(std::move(points)),
-          temp_(points_.size()),
-          bit_(fenwick_size) {}
-
-    i64 count_pairs() {
-        i64 result = 0;
-        for (const Point& p : points_) {
-            result += static_cast<i64>(p.w) * static_cast<i64>(p.w - 1) / 2LL;
-        }
-        result_ = result;
-        cdq(0, static_cast<int>(points_.size()) - 1);
-        return result_;
-    }
-
-private:
-    std::vector<Point> points_;
-    std::vector<Point> temp_;
-    Fenwick bit_;
-    i64 result_ = 0;
-
-    void cdq(const int left, const int right) {
-        if (left >= right) {
-            return;
-        }
-        const int mid = left + (right - left) / 2;
-        cdq(left, mid);
-        cdq(mid + 1, right);
-
-        int i = left;
-        for (int j = mid + 1; j <= right; ++j) {
-            while (i <= mid && points_[static_cast<std::size_t>(i)].x <=
-                                  points_[static_cast<std::size_t>(j)].x) {
-                const Point& p = points_[static_cast<std::size_t>(i)];
-                bit_.add(p.y, p.w);
-                ++i;
-            }
-            const Point& r = points_[static_cast<std::size_t>(j)];
-            result_ += static_cast<i64>(r.w) * bit_.sum(r.y);
-        }
-        for (int k = left; k < i; ++k) {
-            const Point& p = points_[static_cast<std::size_t>(k)];
-            bit_.add(p.y, -static_cast<i64>(p.w));
-        }
-
-        int a = left;
-        int b = mid + 1;
-        int t = left;
-        while (a <= mid && b <= right) {
-            if (points_[static_cast<std::size_t>(a)].x <= points_[static_cast<std::size_t>(b)].x) {
-                temp_[static_cast<std::size_t>(t++)] = points_[static_cast<std::size_t>(a++)];
-            } else {
-                temp_[static_cast<std::size_t>(t++)] = points_[static_cast<std::size_t>(b++)];
-            }
-        }
-        while (a <= mid) {
-            temp_[static_cast<std::size_t>(t++)] = points_[static_cast<std::size_t>(a++)];
-        }
-        while (b <= right) {
-            temp_[static_cast<std::size_t>(t++)] = points_[static_cast<std::size_t>(b++)];
-        }
-        for (int k = left; k <= right; ++k) {
-            points_[static_cast<std::size_t>(k)] = temp_[static_cast<std::size_t>(k)];
-        }
-    }
-};
 
 i64 solve(const int n) {
     const std::vector<std::int8_t> mu = mobius_values(n);
-
-    int y_shift = 0;
-    int y_max = 0;
-    std::vector<Point> points = build_compressed_points(mu, y_shift, y_max);
-
-    CDQCounter counter(std::move(points), y_max);
-    return counter.count_pairs();
+    const i64 total_pairs = static_cast<i64>(n) * static_cast<i64>(n + 1) / 2LL;
+    const i64 bad_a = count_positive_weighted_segments(mu, 99, -100);
+    const i64 bad_b = count_positive_weighted_segments(mu, -100, 99);
+    return total_pairs - bad_a - bad_b;
 }
 
 bool run_checkpoints() {

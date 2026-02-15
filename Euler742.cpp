@@ -4,107 +4,162 @@
 #include <numeric>
 #include <vector>
 
-using namespace std;
+using i64 = std::int64_t;
 
-using ll = long long;
-
-struct Vector {
-    int u;
-    int v;
+struct Edge {
+    int x;
+    int y;
 };
 
-bool slope_less(const Vector& lhs, const Vector& rhs) {
-    ll left = static_cast<ll>(lhs.v) * rhs.u;
-    ll right = static_cast<ll>(rhs.v) * lhs.u;
-    if (left != right) return left < right;
-    if (lhs.u != rhs.u) return lhs.u < rhs.u;
-    return lhs.v < rhs.v;
+static bool slope_less(const Edge& a, const Edge& b) {
+    return static_cast<i64>(a.x) * b.y < static_cast<i64>(b.x) * a.y;
 }
 
-vector<Vector> generate_candidates(int limit) {
-    vector<Vector> candidates;
-    candidates.reserve(limit * limit);
-    for (int u = 1; u <= limit; ++u) {
-        for (int v = 1; v <= limit; ++v) {
-            if (std::gcd(u, v) == 1) {
-                candidates.push_back({u, v});
-            }
-        }
-    }
-    sort(candidates.begin(), candidates.end(), slope_less);
-    return candidates;
-}
-
-ll solve_with_axes(int N, int limit) {
-    if (N < 4 || (N - 4) % 4 != 0) return -1;
-    int K = (N - 4) / 4;
-    if (K == 0) return 1;
-
-    auto candidates = generate_candidates(limit);
-    if (static_cast<int>(candidates.size()) < K) return -1;
-
-    int max_w = limit * K;
-    const ll kInf = (1LL << 62);
-
-    vector<vector<ll>> dp(K + 1, vector<ll>(max_w + 1, kInf));
-    vector<int> max_sum(K + 1, -1);
-    dp[0][0] = 1;
-    max_sum[0] = 0;
-
-    for (const auto& vec : candidates) {
-        int u = vec.u;
-        int v = vec.v;
-
-        ll local_cost = 2LL * u * v + 2LL * u + 2LL * v;
-        ll b4 = 4LL * v;
-
-        for (int k = K - 1; k >= 0; --k) {
-            int limit_sum = max_sum[k];
-            if (limit_sum < 0) continue;
-            int max_here = min(limit_sum, max_w - u);
-            auto& cur = dp[k];
-            auto& nxt = dp[k + 1];
-            for (int w = 0; w <= max_here; ++w) {
-                ll cur_area = cur[w];
-                if (cur_area == kInf) continue;
-                int new_w = w + u;
-                ll new_area = cur_area + local_cost + b4 * w;
-                if (new_area < nxt[new_w]) {
-                    nxt[new_w] = new_area;
-                    if (new_w > max_sum[k + 1]) max_sum[k + 1] = new_w;
-                }
-            }
+static std::vector<Edge> get_edge_candidates(int num_edges) {
+    std::vector<std::vector<int>> primitive(num_edges + 1, std::vector<int>(num_edges + 1, 0));
+    for (int y = 1; y <= num_edges; ++y) {
+        for (int x = 1; x < y; ++x) {
+            if (std::gcd(x, y) == 1) primitive[y][x] = 1;
         }
     }
 
-    ll best = kInf;
-    for (ll area : dp[K]) best = min(best, area);
+    std::vector<std::vector<int>> pref(num_edges + 1, std::vector<int>(num_edges + 1, 0));
+    for (int y = 1; y <= num_edges; ++y) {
+        int row = 0;
+        for (int x = 1; x <= num_edges; ++x) {
+            row += primitive[y][x];
+            pref[y][x] = pref[y - 1][x] + row;
+        }
+    }
+
+    std::vector<Edge> edges;
+    edges.reserve(num_edges * num_edges / 2);
+    for (int y = 1; y <= num_edges; ++y) {
+        for (int x = 1; x < y; ++x) {
+            if (!primitive[y][x]) continue;
+            const int count_smaller_edges = pref[y][x];
+            if (2 + count_smaller_edges > num_edges) break;
+            edges.push_back({x, y});
+        }
+    }
+    std::sort(edges.begin(), edges.end(), slope_less);
+    return edges;
+}
+
+using SAPair = std::pair<int, i64>;
+
+static std::vector<SAPair> filter_convex_hull(std::vector<SAPair> domain) {
+    std::sort(domain.begin(), domain.end());
+    std::vector<SAPair> out;
+    out.reserve(domain.size());
+
+    for (const auto& cur : domain) {
+        const int s = cur.first;
+        const i64 a = cur.second;
+
+        if (!out.empty() && out.back().first == s) continue;
+
+        while (out.size() >= 2) {
+            const int s1 = out[out.size() - 1].first;
+            const i64 a1 = out[out.size() - 1].second;
+            const int s2 = out[out.size() - 2].first;
+            const i64 a2 = out[out.size() - 2].second;
+
+            __int128 lhs = static_cast<__int128>(a - a1) * static_cast<__int128>(s - s2);
+            __int128 rhs = static_cast<__int128>(a - a2) * static_cast<__int128>(s - s1);
+            if (lhs >= rhs) break;
+            out.pop_back();
+        }
+
+        if (!out.empty() && out.back().second <= a) continue;
+        out.push_back(cur);
+    }
+    return out;
+}
+
+static std::vector<SAPair> combine_convex_hulls(const std::vector<SAPair>& d0,
+                                                const std::vector<SAPair>& d1) {
+    std::vector<SAPair> merged;
+    merged.reserve(d0.size() + d1.size());
+    std::size_t i = 0;
+    std::size_t j = 0;
+    while (i < d0.size() && j < d1.size()) {
+        if (d0[i] <= d1[j]) {
+            merged.push_back(d0[i++]);
+        } else {
+            merged.push_back(d1[j++]);
+        }
+    }
+    while (i < d0.size()) merged.push_back(d0[i++]);
+    while (j < d1.size()) merged.push_back(d1[j++]);
+    return filter_convex_hull(std::move(merged));
+}
+
+static std::vector<SAPair> update_sa_domain(const std::vector<SAPair>& domain, const Edge& edge) {
+    std::vector<SAPair> out;
+    out.reserve(domain.size());
+    const int x = edge.x;
+    const int y = edge.y;
+    for (const auto& [s, a] : domain) {
+        const int ns = s + 2 * y;
+        const i64 na = a + 2LL * x * (s + y);
+        out.push_back({ns, na});
+    }
+    return out;
+}
+
+static i64 solve(int num_edges) {
+    if (num_edges < 4 || (num_edges & 3) != 0) return -1;
+    const int q_edges = num_edges / 4;
+    if (q_edges == 1) return 1;
+
+    std::vector<std::vector<SAPair>> domain(q_edges + 1);
+    domain[1].push_back({1, 0});
+
+    const auto edges = get_edge_candidates(q_edges);
+    for (const auto& edge : edges) {
+        for (int used = q_edges - 1; used >= 1; --used) {
+            if (domain[used].empty()) continue;
+            auto with_new = update_sa_domain(domain[used], edge);
+            domain[used + 1] = combine_convex_hulls(domain[used + 1], with_new);
+        }
+    }
+
+    i64 best = (1LL << 62);
+    for (int left = 1; left < q_edges; ++left) {
+        const auto& d0 = domain[left];
+        const auto& d1 = domain[q_edges - left];
+        for (const auto& [s0, a0] : d0) {
+            for (const auto& [s1, a1] : d1) {
+                const i64 val = a0 + a1 + static_cast<i64>(s0 + 2) * static_cast<i64>(s1 + 2) - 2;
+                if (val < best) best = val;
+            }
+        }
+    }
     return best;
 }
 
 int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
+    std::ios::sync_with_stdio(false);
+    std::cin.tie(nullptr);
 
-    const int limit = 80;
-
-    if (solve_with_axes(4, limit) != 1) {
-        cerr << "Validation failed: A(4) != 1\n";
+    if (solve(4) != 1) {
+        std::cerr << "Validation failed: A(4) != 1\n";
         return 1;
     }
-    if (solve_with_axes(8, limit) != 7) {
-        cerr << "Validation failed: A(8) != 7\n";
+    if (solve(8) != 7) {
+        std::cerr << "Validation failed: A(8) != 7\n";
         return 1;
     }
-    if (solve_with_axes(40, limit) != 1039) {
-        cerr << "Validation failed: A(40) != 1039\n";
+    if (solve(40) != 1039) {
+        std::cerr << "Validation failed: A(40) != 1039\n";
         return 1;
     }
-    if (solve_with_axes(100, limit) != 17473) {
-        cerr << "Validation failed: A(100) != 17473\n";
+    if (solve(100) != 17473) {
+        std::cerr << "Validation failed: A(100) != 17473\n";
         return 1;
     }
 
-    cout << solve_with_axes(1000, limit) << "\n";
+    std::cout << solve(1000) << '\n';
     return 0;
 }

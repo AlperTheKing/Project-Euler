@@ -1,0 +1,23 @@
+# Generated: 2026-02-15T22:01:03Z
+# Command: python3 tools/pe_benchmark.py (single-run per listed problem)
+# Order: runtime desc
+
+ 1. Euler654 | runtime=4.469732s | status=OK | optimized=done (<3s)
+ 2. Euler947 | runtime=4.097142s | status=OK | optimized=done (<3s)
+ 3. Euler908 | runtime=4.043467s | status=OK | optimized=done (<3s)
+ 4. Euler785 | runtime=4.028373s | status=OK | optimized=done (<3s)
+ 5. Euler850 | runtime=4.019899s | status=OK | optimized=done (<3s)
+ 6. Euler709 | runtime=3.974218s | status=OK | optimized=done (<3s)
+ 7. Euler739 | runtime=3.931159s | status=OK | optimized=done (<3s)
+ 8. Euler658 | runtime=3.712965s | status=OK | optimized=done (<3s)
+ 9. Euler915 | runtime=3.698966s | status=OK | optimized=done (<3s)
+10. Euler657 | runtime=3.634318s | status=OK | optimized=done (<3s)
+11. Euler757 | runtime=3.598488s | status=OK | optimized=done (<3s)
+12. Euler808 | runtime=3.551398s | status=OK | optimized=done (<3s)
+13. Euler721 | runtime=3.327499s | status=OK | optimized=done (<3s)
+14. Euler937 | runtime=3.269704s | status=OK | optimized=done (<3s)
+15. Euler743 | runtime=3.257548s | status=OK | optimized=done (<3s)
+16. Euler662 | runtime=3.229361s | status=OK | optimized=done (<3s)
+17. Euler737 | runtime=3.214878s | status=OK | optimized=done (<3s)
+18. Euler738 | runtime=3.205608s | status=OK | optimized=done (<3s)
+19. Euler715 | runtime=3.106195s | status=OK | optimized=done (<3s)

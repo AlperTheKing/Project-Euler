@@ -1,193 +1,124 @@
-#include <algorithm>
-#include <array>
-#include <atomic>
 #include <cstdint>
 #include <iostream>
-#include <thread>
 #include <vector>
 
-using namespace std;
+using u64 = std::uint64_t;
 
 namespace {
 
-constexpr uint64_t MOD = 1000000007ULL;
-constexpr int MAX_PERM = 64;
+constexpr u64 MOD = 1000000007ULL;
 
-struct State {
-    int n = 0;
-    int inv = 0;
-    array<int, MAX_PERM> perm{};
-};
-
-template <typename F>
-void for_each_child(State& st, int m, int max_len, F&& func) {
-    const int n = st.n;
-    if (n >= max_len) return;
-
-    const int INF = 1'000'000'000;
-    array<int, MAX_PERM> min_nonrecord{};
-    array<int, MAX_PERM> max_suffix{};
-
-    // min_nonrecord[p] tracks the smallest prefix element that has a smaller predecessor.
-    int min_val = INF;
-    int min_nr = INF;
-    min_nonrecord[0] = INF;
-    for (int i = 0; i < n; ++i) {
-        int v = st.perm[i];
-        if (v > min_val) {
-            if (v < min_nr) min_nr = v;
-        } else {
-            min_val = v;
-        }
-        min_nonrecord[i + 1] = min_nr;
-    }
-
-    int max_val = -1;
-    max_suffix[n] = -1;
-    for (int i = n - 1; i >= 0; --i) {
-        int v = st.perm[i];
-        if (v > max_val) max_val = v;
-        max_suffix[i] = max_val;
-    }
-
-    const int val = n + 1;
-    for (int pos = 0; pos <= n; ++pos) {
-        int mn = min_nonrecord[pos];
-        // Inserting the new max before pos is safe iff suffix max <= min_nonrecord(prefix).
-        if (mn != INF && max_suffix[pos] > mn) continue;
-        int add = n - pos;
-        if (st.inv + add > m) continue;
-
-        for (int i = n; i > pos; --i) st.perm[i] = st.perm[i - 1];
-        st.perm[pos] = val;
-        st.n += 1;
-        st.inv += add;
-        func();
-        st.n -= 1;
-        st.inv -= add;
-        for (int i = pos; i < n; ++i) st.perm[i] = st.perm[i + 1];
-    }
+inline void add_mod(u64& x, u64 y) {
+    x += y;
+    if (x >= MOD) x -= MOD;
 }
 
-void dfs(State& st, int m, int max_len, vector<uint64_t>& counts) {
-    counts[st.n] += 1;
-    if (st.n >= max_len) return;
-    for_each_child(st, m, max_len, [&]() { dfs(st, m, max_len, counts); });
-}
+u64 compute_f(u64 n, int m, bool require_stable) {
+    const int dim_inv = m + 1;
+    const int dim_last132 = m + 3;
+    const int dim_last21 = m + 3;
+    const std::size_t plane = static_cast<std::size_t>(dim_last132) * static_cast<std::size_t>(dim_last21);
+    const std::size_t total_states = static_cast<std::size_t>(dim_inv) * plane;
 
-void collect_tasks(State& st, int m, int max_len, int cut,
-                   vector<uint64_t>& base_counts, vector<State>& tasks) {
-    if (st.n < cut) base_counts[st.n] += 1;
-    if (st.n >= max_len) return;
-    if (st.n == cut) {
-        tasks.push_back(st);
-        return;
-    }
-    for_each_child(st, m, max_len,
-                   [&]() { collect_tasks(st, m, max_len, cut, base_counts, tasks); });
-}
+    auto idx = [=](int inv, int last132, int last21) -> std::size_t {
+        return static_cast<std::size_t>(inv) * plane +
+               static_cast<std::size_t>(last132 + 1) * static_cast<std::size_t>(dim_last21) +
+               static_cast<std::size_t>(last21);
+    };
 
-vector<uint64_t> compute_counts(int m, int max_len, unsigned threads) {
-    vector<uint64_t> counts(static_cast<size_t>(max_len + 1), 0);
-    if (max_len == 0) {
-        counts[0] = 1;
-        return counts;
-    }
+    std::vector<u64> cur(total_states, 0);
+    std::vector<u64> nxt(total_states, 0);
+    cur[idx(m, -1, 0)] = 1;
 
-    if (threads <= 1 || max_len <= 5) {
-        State st;
-        dfs(st, m, max_len, counts);
-        return counts;
-    }
+    u64 total = 1;
+    const int max_len = m + 2;
+    const int limit = (n < static_cast<u64>(max_len)) ? static_cast<int>(n) : max_len;
 
-    int cut = min(6, max_len);
-    vector<uint64_t> base_counts(static_cast<size_t>(max_len + 1), 0);
-    vector<State> tasks;
-    State st;
-    collect_tasks(st, m, max_len, cut, base_counts, tasks);
-
-    if (tasks.empty()) return base_counts;
-
-    unsigned tcount = min<unsigned>(threads, tasks.size());
-    vector<vector<uint64_t>> thread_counts(
-        tcount, vector<uint64_t>(static_cast<size_t>(max_len + 1), 0));
-    atomic<size_t> task_index{0};
-    vector<thread> workers;
-    workers.reserve(tcount);
-
-    for (unsigned tid = 0; tid < tcount; ++tid) {
-        workers.emplace_back([&, tid]() {
-            while (true) {
-                size_t idx = task_index.fetch_add(1, memory_order_relaxed);
-                if (idx >= tasks.size()) break;
-                State local = tasks[idx];
-                dfs(local, m, max_len, thread_counts[tid]);
+    for (int length = 1; length <= limit; ++length) {
+        std::fill(nxt.begin(), nxt.end(), 0);
+        for (int inv = 0; inv <= m; ++inv) {
+            const int upper = (inv + 1 < length) ? (inv + 1) : length;
+            if (upper <= 0) continue;
+            for (int last132p1 = 0; last132p1 <= length; ++last132p1) {
+                const int start = last132p1;
+                if (start >= upper) continue;
+                for (int last21 = 0; last21 < length; ++last21) {
+                    const u64 cnt = cur[static_cast<std::size_t>(inv) * plane +
+                                        static_cast<std::size_t>(last132p1) * static_cast<std::size_t>(dim_last21) +
+                                        static_cast<std::size_t>(last21)];
+                    if (cnt == 0) continue;
+                    for (int i = start; i < upper; ++i) {
+                        add_mod(total, cnt % MOD);
+                        if (i < last21) {
+                            add_mod(nxt[idx(inv - i, i, last21 + 1)], cnt % MOD);
+                        } else {
+                            add_mod(nxt[idx(inv - i, last132p1 - 1, i)], cnt % MOD);
+                        }
+                    }
+                }
             }
-        });
-    }
-    for (auto& th : workers) th.join();
-
-    counts = base_counts;
-    for (unsigned tid = 0; tid < tcount; ++tid) {
-        for (int i = 0; i <= max_len; ++i) counts[i] += thread_counts[tid][i];
-    }
-    return counts;
-}
-
-uint64_t sum_counts(const vector<uint64_t>& counts, int up_to) {
-    uint64_t sum = 0;
-    for (int i = 0; i <= up_to; ++i) sum += counts[i];
-    return sum;
-}
-
-uint64_t sum_counts_mod(const vector<uint64_t>& counts, int up_to) {
-    uint64_t sum = 0;
-    for (int i = 0; i <= up_to; ++i) sum = (sum + counts[i]) % MOD;
-    return sum;
-}
-
-uint64_t compute_f(uint64_t n, int m, unsigned threads, bool require_stable) {
-    const int stable_len = m + 2;
-    const int max_len = stable_len + 1;
-    vector<uint64_t> counts = compute_counts(m, max_len, threads);
-
-    // Once counts stabilize, appending the new maximum is the only valid extension.
-    if (require_stable && counts[stable_len] != counts[stable_len + 1]) {
-        cerr << "Stabilization check failed at length " << stable_len << ".\n";
-        exit(1);
+        }
+        cur.swap(nxt);
     }
 
-    if (n < static_cast<uint64_t>(stable_len)) {
-        return sum_counts_mod(counts, static_cast<int>(n));
+    if (n <= static_cast<u64>(max_len)) return total;
+
+    u64 g = 0;
+    for (u64 v : cur) add_mod(g, v % MOD);
+
+    if (require_stable) {
+        const int length = max_len + 1;
+        std::fill(nxt.begin(), nxt.end(), 0);
+        for (int inv = 0; inv <= m; ++inv) {
+            const int upper = (inv + 1 < length) ? (inv + 1) : length;
+            if (upper <= 0) continue;
+            for (int last132p1 = 0; last132p1 <= max_len; ++last132p1) {
+                const int start = last132p1;
+                if (start >= upper) continue;
+                for (int last21 = 0; last21 <= max_len; ++last21) {
+                    const u64 cnt = cur[static_cast<std::size_t>(inv) * plane +
+                                        static_cast<std::size_t>(last132p1) * static_cast<std::size_t>(dim_last21) +
+                                        static_cast<std::size_t>(last21)];
+                    if (cnt == 0) continue;
+                    for (int i = start; i < upper; ++i) {
+                        if (i < last21) {
+                            add_mod(nxt[idx(inv - i, i, last21 + 1)], cnt % MOD);
+                        } else {
+                            add_mod(nxt[idx(inv - i, last132p1 - 1, i)], cnt % MOD);
+                        }
+                    }
+                }
+            }
+        }
+        u64 g_next = 0;
+        for (u64 v : nxt) add_mod(g_next, v % MOD);
+        if (g_next != g) {
+            std::cerr << "Stabilization check failed.\n";
+            std::exit(1);
+        }
     }
 
-    uint64_t prefix = sum_counts_mod(counts, stable_len - 1);
-    uint64_t g = counts[stable_len] % MOD;
-    uint64_t mult = (n - static_cast<uint64_t>(stable_len - 1)) % MOD;
-    return (prefix + (g * mult) % MOD) % MOD;
+    const u64 extra = ((n - static_cast<u64>(max_len)) % MOD) * g % MOD;
+    return (total + extra) % MOD;
 }
 
 void run_checks() {
     struct Check {
-        uint64_t n;
+        u64 n;
         int m;
-        uint64_t expected;
+        u64 expected;
     };
-
-    vector<Check> checks = {
+    const Check checks[] = {
         {2, 0, 3},
         {4, 5, 32},
         {10, 25, 294400},
     };
-
     for (const auto& chk : checks) {
-        int max_len = static_cast<int>(chk.n);
-        vector<uint64_t> counts = compute_counts(chk.m, max_len, 1);
-        uint64_t got = sum_counts(counts, max_len);
+        const u64 got = compute_f(chk.n, chk.m, false);
         if (got != chk.expected) {
-            cerr << "Validation failed for f(" << chk.n << "," << chk.m << "). "
-                 << "Expected " << chk.expected << ", got " << got << ".\n";
-            exit(1);
+            std::cerr << "Validation failed for f(" << chk.n << "," << chk.m << "): "
+                      << got << " != " << chk.expected << "\n";
+            std::exit(1);
         }
     }
 }
@@ -196,13 +127,8 @@ void run_checks() {
 
 int main() {
     run_checks();
-
-    const uint64_t n = 1000000000000000000ULL;
+    const u64 n = 1000000000000000000ULL;
     const int m = 40;
-    unsigned threads = thread::hardware_concurrency();
-    if (threads == 0) threads = 1;
-
-    uint64_t answer = compute_f(n, m, threads, true);
-    cout << answer << "\n";
+    std::cout << compute_f(n, m, true) << '\n';
     return 0;
 }

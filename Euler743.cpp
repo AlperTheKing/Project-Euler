@@ -7,44 +7,24 @@
 namespace {
 
 using u64 = std::uint64_t;
-using u128 = __uint128_t;
+using u32 = std::uint32_t;
 
 constexpr u64 kMod = 1'000'000'007ULL;
+
+inline u64 mod_mul(const u64 a, const u64 b) {
+    return (a * b) % kMod;
+}
 
 u64 mod_pow(u64 base, u64 exp) {
     u64 result = 1ULL;
     while (exp > 0ULL) {
         if ((exp & 1ULL) != 0ULL) {
-            result = static_cast<u64>((static_cast<u128>(result) * base) % kMod);
+            result = mod_mul(result, base);
         }
-        base = static_cast<u64>((static_cast<u128>(base) * base) % kMod);
+        base = mod_mul(base, base);
         exp >>= 1ULL;
     }
     return result;
-}
-
-void batch_invert_range(const u64 left,
-                        const u64 right,
-                        std::vector<u64>& inverses) {
-    const std::size_t m = static_cast<std::size_t>(right - left + 1ULL);
-    inverses.assign(m, 0ULL);
-
-    std::vector<u64> prefix(m, 0ULL);
-    for (std::size_t i = 0; i < m; ++i) {
-        const u64 value = (left + static_cast<u64>(i)) % kMod;
-        prefix[i] = (i == 0U)
-                        ? value
-                        : static_cast<u64>((static_cast<u128>(prefix[i - 1U]) * value) % kMod);
-    }
-
-    u64 suffix_inv = mod_pow(prefix[m - 1U], kMod - 2ULL);
-    for (std::size_t i = m; i-- > 0U;) {
-        const u64 left_prod = (i == 0U) ? 1ULL : prefix[i - 1U];
-        inverses[i] = static_cast<u64>((static_cast<u128>(suffix_inv) * left_prod) % kMod);
-
-        const u64 value = (left + static_cast<u64>(i)) % kMod;
-        suffix_inv = static_cast<u64>((static_cast<u128>(suffix_inv) * value) % kMod);
-    }
 }
 
 u64 A(const u64 k, const u64 n) {
@@ -57,38 +37,42 @@ u64 A(const u64 k, const u64 n) {
     u64 answer = term;
 
     const u64 inv_b = mod_pow(b, kMod - 2ULL);
-    const u64 inv_b2 = static_cast<u64>((static_cast<u128>(inv_b) * inv_b) % kMod);
+    const u64 inv_b2 = mod_mul(inv_b, inv_b);
 
     const u64 half = k / 2ULL;
-    constexpr u64 kBlock = 1'000'000ULL;
+    std::vector<u32> inverses(static_cast<std::size_t>(half + 1ULL), 0U);
+    if (half >= 1ULL) {
+        inverses[1] = 1U;
+    }
+    for (u64 i = 2ULL; i <= half; ++i) {
+        inverses[static_cast<std::size_t>(i)] = static_cast<u32>(
+            kMod - mod_mul(kMod / i, inverses[static_cast<std::size_t>(kMod % i)]));
+    }
 
-    std::vector<u64> inverses;
+    u64 num1 = k % kMod;
+    u64 num2 = (k + kMod - 1ULL) % kMod;
+    for (u64 x = 1ULL; x <= half; ++x) {
+        const u64 inv_x = inverses[static_cast<std::size_t>(x)];
 
-    u64 processed = 0ULL;
-    while (processed < half) {
-        const u64 left = processed + 1ULL;
-        const u64 right = std::min(half, processed + kBlock);
+        term = mod_mul(term, num1);
+        term = mod_mul(term, num2);
+        term = mod_mul(term, inv_x);
+        term = mod_mul(term, inv_x);
+        term = mod_mul(term, inv_b2);
 
-        batch_invert_range(left, right, inverses);
-
-        for (u64 x = left; x <= right; ++x) {
-            const u64 inv_x = inverses[static_cast<std::size_t>(x - left)];
-            const u64 num1 = (k - 2ULL * (x - 1ULL)) % kMod;
-            const u64 num2 = (k - 2ULL * (x - 1ULL) - 1ULL) % kMod;
-
-            term = static_cast<u64>((static_cast<u128>(term) * num1) % kMod);
-            term = static_cast<u64>((static_cast<u128>(term) * num2) % kMod);
-            term = static_cast<u64>((static_cast<u128>(term) * inv_x) % kMod);
-            term = static_cast<u64>((static_cast<u128>(term) * inv_x) % kMod);
-            term = static_cast<u64>((static_cast<u128>(term) * inv_b2) % kMod);
-
-            answer += term;
-            if (answer >= kMod) {
-                answer -= kMod;
-            }
+        answer += term;
+        if (answer >= kMod) {
+            answer -= kMod;
         }
 
-        processed = right;
+        num1 += kMod - 2ULL;
+        if (num1 >= kMod) {
+            num1 -= kMod;
+        }
+        num2 += kMod - 2ULL;
+        if (num2 >= kMod) {
+            num2 -= kMod;
+        }
     }
 
     return answer;

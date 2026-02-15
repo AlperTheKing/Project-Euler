@@ -1,8 +1,10 @@
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <vector>
 
+using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 using u128 = unsigned __int128;
 
@@ -67,6 +69,32 @@ static bool is_prime(u64 n) {
     return true;
 }
 
+static std::vector<u32> sieve_primes(const u32 limit) {
+    std::vector<bool> is_prime_vec(static_cast<std::size_t>(limit + 1), true);
+    if (limit >= 0) {
+        is_prime_vec[0] = false;
+    }
+    if (limit >= 1) {
+        is_prime_vec[1] = false;
+    }
+    for (u32 p = 2; static_cast<u64>(p) * p <= limit; ++p) {
+        if (!is_prime_vec[p]) {
+            continue;
+        }
+        for (u32 q = p * p; q <= limit; q += p) {
+            is_prime_vec[q] = false;
+        }
+    }
+    std::vector<u32> primes;
+    primes.reserve(static_cast<std::size_t>(limit / 10));
+    for (u32 i = 2; i <= limit; ++i) {
+        if (is_prime_vec[i]) {
+            primes.push_back(i);
+        }
+    }
+    return primes;
+}
+
 static u64 reverse_digits(u64 x) {
     u64 r = 0;
     while (x > 0) {
@@ -80,47 +108,44 @@ static bool is_palindrome(u64 x) {
     return x == reverse_digits(x);
 }
 
-static u64 isqrt_u64(u64 n) {
-    u64 lo = 0;
-    u64 hi = 1;
-    while (hi <= n / hi) {
-        hi <<= 1ULL;
+static u64 isqrt_u64(const u64 n) {
+    u64 r = static_cast<u64>(std::sqrt(static_cast<long double>(n)));
+    while ((r + 1ULL) <= n / (r + 1ULL)) {
+        ++r;
     }
-    while (lo + 1 < hi) {
-        u64 mid = lo + (hi - lo) / 2;
-        if (mid <= n / mid) {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
+    while (r > n / r) {
+        --r;
     }
-    return lo;
+    return r;
 }
 
 static std::vector<u64> first_reversible_prime_squares(int need) {
-    std::vector<u64> vals;
-    vals.reserve(need);
+    for (u32 limit = 1U << 16U;; limit <<= 1U) {
+        const auto primes = sieve_primes(limit);
+        std::vector<u64> vals;
+        vals.reserve(static_cast<std::size_t>(need + 16));
 
-    u64 p = 2;
-    while (static_cast<int>(vals.size()) < need) {
-        if (is_prime(p)) {
-            const u64 sq = p * p;
-            if (!is_palindrome(sq)) {
-                const u64 rev = reverse_digits(sq);
-                const u64 r = isqrt_u64(rev);
-                if (r * r == rev && is_prime(r)) {
-                    vals.push_back(sq);
+        for (u32 p : primes) {
+            const u64 sq = static_cast<u64>(p) * static_cast<u64>(p);
+            if (is_palindrome(sq)) {
+                continue;
+            }
+            const u64 rev = reverse_digits(sq);
+            const u64 r = isqrt_u64(rev);
+            if (r * r == rev && is_prime(r)) {
+                vals.push_back(sq);
+                if (static_cast<int>(vals.size()) >= need) {
+                    vals.resize(static_cast<std::size_t>(need));
+                    return vals;
                 }
             }
         }
-        if (p == 2) {
-            p = 3;
-        } else {
-            p += 2;
+        if (limit >= (1U << 30U)) {
+            break;
         }
     }
 
-    return vals;
+    return {};
 }
 
 int main() {

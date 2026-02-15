@@ -5,87 +5,72 @@
 
 namespace {
 
-constexpr std::uint64_t kMod = 1'000'000'007ULL;
+using u64 = std::uint64_t;
+constexpr u64 kMod = 1'000'000'007ULL;
 
-inline int parity32(std::uint32_t x) {
-    return __builtin_parity(x);
-}
-
-std::vector<std::uint32_t> build_spf(int n) {
-    std::vector<std::uint32_t> spf(static_cast<std::size_t>(n) + 1, 0);
-    std::vector<std::uint32_t> primes;
+std::vector<int> primes_until(const int n) {
+    std::vector<bool> is_prime(static_cast<std::size_t>(n + 1), true);
+    is_prime[0] = false;
+    is_prime[1] = false;
+    for (int p = 2; static_cast<u64>(p) * static_cast<u64>(p) <= static_cast<u64>(n); ++p) {
+        if (!is_prime[p]) {
+            continue;
+        }
+        for (int q = p * p; q <= n; q += p) {
+            is_prime[q] = false;
+        }
+    }
+    std::vector<int> primes;
     primes.reserve(static_cast<std::size_t>(n / 10));
-
-    spf[1] = 1;
     for (int i = 2; i <= n; ++i) {
-        if (spf[i] == 0) {
-            spf[i] = static_cast<std::uint32_t>(i);
-            primes.push_back(static_cast<std::uint32_t>(i));
-        }
-        for (std::uint32_t p : primes) {
-            const std::uint64_t v = static_cast<std::uint64_t>(i) * p;
-            if (v > static_cast<std::uint64_t>(n)) {
-                break;
-            }
-            spf[static_cast<std::size_t>(v)] = p;
-            if (p == spf[static_cast<std::size_t>(i)]) {
-                break;
-            }
+        if (is_prime[i]) {
+            primes.push_back(i);
         }
     }
-    return spf;
+    return primes;
 }
 
-std::uint64_t solve(int n) {
-    const std::vector<std::uint32_t> spf = build_spf(n);
-    std::vector<std::uint32_t> inert_exp(static_cast<std::size_t>(n / 2) + 1, 0);
+u64 solve(const int n) {
+    const auto primes = primes_until(n);
+    std::vector<std::uint8_t> diff(static_cast<std::size_t>(n + 1), 0U);
 
-    std::uint32_t exp2 = 0;
-    int parity = 0;
-
-    std::uint64_t fact_mod = 1;
-    std::uint64_t sum_mod = 0;
-
-    for (int k = 1; k <= n; ++k) {
-        fact_mod = (fact_mod * static_cast<std::uint64_t>(k)) % kMod;
-
-        int x = k;
-        while (x > 1) {
-            const std::uint32_t p = spf[static_cast<std::size_t>(x)];
-            std::uint32_t cnt = 0;
-            do {
-                x /= static_cast<int>(p);
-                ++cnt;
-            } while (x > 1 && spf[static_cast<std::size_t>(x)] == p);
-
-            if (p == 2U) {
-                const int old_bit = parity32(exp2);
-                exp2 += cnt;
-                const int new_bit = parity32(exp2);
-                parity ^= (old_bit ^ new_bit);
-            } else {
-                const int r = static_cast<int>(p & 7U);
-                if (r == 5 || r == 7) {
-                    const std::size_t idx = static_cast<std::size_t>(p >> 1U);
-                    const std::uint32_t old_exp = inert_exp[idx];
-                    const int old_bit = parity32(old_exp);
-                    const std::uint32_t new_exp = old_exp + cnt;
-                    inert_exp[idx] = new_exp;
-                    const int new_bit = parity32(new_exp);
-                    parity ^= (old_bit ^ new_bit);
-                }
-            }
+    for (int p : primes) {
+        const int r = p & 7;
+        if (r == 1 || r == 3) {
+            continue;
         }
 
-        if (parity == 0) {
-            sum_mod += fact_mod;
-            if (sum_mod >= kMod) {
-                sum_mod -= kMod;
+        int e = 0;
+        int pe = __builtin_parity(static_cast<unsigned>(e));
+        for (int q = p; q <= n; q += p) {
+            int x = q / p;
+            int cnt = 1;
+            while (x % p == 0) {
+                ++cnt;
+                x /= p;
+            }
+            e += cnt;
+            const int ce = __builtin_parity(static_cast<unsigned>(e));
+            diff[static_cast<std::size_t>(q)] ^= static_cast<std::uint8_t>(pe ^ ce);
+            pe = ce;
+        }
+    }
+
+    std::uint8_t parity = 0U;
+    u64 ans = 0;
+    u64 fact = 1;
+    for (int k = 1; k <= n; ++k) {
+        parity ^= diff[static_cast<std::size_t>(k)];
+        fact = (fact * static_cast<u64>(k)) % kMod;
+        if (parity == 0U) {
+            ans += fact;
+            if (ans >= kMod) {
+                ans -= kMod;
             }
         }
     }
 
-    return sum_mod;
+    return ans;
 }
 
 void run_validations() {

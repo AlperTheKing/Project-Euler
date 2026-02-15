@@ -2,7 +2,6 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -55,74 +54,133 @@ inline u64 add_mod(u64 a, u64 b) {
     return s;
 }
 
-u64 f_mod(const int target_k) {
-    if (target_k == 1) {
-        return 0;
+struct FlatMap {
+    std::vector<std::uint32_t> keys;
+    std::vector<u64> values;
+    std::size_t used = 0;
+
+    static constexpr std::uint32_t kEmpty = 0xFFFFFFFFu;
+
+    static std::uint32_t hash(std::uint32_t x) {
+        x ^= x >> 16;
+        x *= 0x7feb352d;
+        x ^= x >> 15;
+        x *= 0x846ca68b;
+        x ^= x >> 16;
+        return x;
     }
 
-    // For a component tree U, SG(U) = (SG(left) xor SG(right)) + 1.
-    // Let h(k)=SG(T(k)) for component play (root removable).
-    int h_k_minus_2 = 0;  // h(0)
-    int h_k_minus_1 = 1;  // h(1)
-
-    std::unordered_map<int, u64> d_k_minus_2;  // D(0): no moves
-    std::unordered_map<int, u64> d_k_minus_1;  // D(1): remove root -> 0
-    d_k_minus_1.emplace(0, 1ULL);
-    d_k_minus_2.reserve(1024);
-    d_k_minus_1.reserve(1024);
-
-    std::unordered_map<int, u64> d_cur;
-    d_cur.reserve(2048);
-
-    u64 f_value = 0ULL;
-
-    for (int k = 2; k <= target_k; ++k) {
-        // Full poisoned-root game on T(k) is a sum of components T(k-1) and T(k-2).
-        // Winning first moves are those that leave xor = 0.
-        const auto it_a = d_k_minus_1.find(h_k_minus_2);
-        const auto it_b = d_k_minus_2.find(h_k_minus_1);
-        const u64 part_a = (it_a == d_k_minus_1.end() ? 0ULL : it_a->second);
-        const u64 part_b = (it_b == d_k_minus_2.end() ? 0ULL : it_b->second);
-        f_value = add_mod(part_a, part_b);
-
-        const int h_k = (h_k_minus_1 ^ h_k_minus_2) + 1;
-
-        d_cur.clear();
-        d_cur.reserve(d_k_minus_1.size() + d_k_minus_2.size() + 8);
-
-        auto add_count = [&](const int idx, const u64 val) {
-            const auto it = d_cur.find(idx);
-            if (it == d_cur.end()) {
-                d_cur.emplace(idx, val % kMod);
-            } else {
-                it->second = add_mod(it->second, val);
+    void rehash(std::size_t cap) {
+        std::vector<std::uint32_t> old_keys = std::move(keys);
+        std::vector<u64> old_values = std::move(values);
+        keys.assign(cap, kEmpty);
+        values.assign(cap, 0);
+        used = 0;
+        for (std::size_t i = 0; i < old_keys.size(); ++i) {
+            if (old_keys[i] != kEmpty) {
+                insert(old_keys[i], old_values[i]);
             }
-        };
-
-        // D(k): move-result nimber counts for component T(k).
-        // 1) remove root -> empty (nimber 0)
-        add_count(0, 1ULL);
-        // 2) move in left child T(k-1)
-        for (const auto& entry : d_k_minus_1) {
-            const int v = entry.first;
-            const int out = (v ^ h_k_minus_2) + 1;
-            add_count(out, entry.second);
         }
-        // 3) move in right child T(k-2)
-        for (const auto& entry : d_k_minus_2) {
-            const int v = entry.first;
-            const int out = (h_k_minus_1 ^ v) + 1;
-            add_count(out, entry.second);
-        }
-
-        d_k_minus_2.swap(d_k_minus_1);
-        d_k_minus_1.swap(d_cur);
-
-        h_k_minus_2 = h_k_minus_1;
-        h_k_minus_1 = h_k;
     }
 
-    return f_value;
+    bool get(std::uint32_t key, u64& out) const {
+        if (keys.empty()) {
+            return false;
+        }
+        const std::size_t mask = keys.size() - 1;
+        std::size_t idx = hash(key) & mask;
+        while (true) {
+            const std::uint32_t cur = keys[idx];
+            if (cur == kEmpty) {
+                return false;
+            }
+            if (cur == key) {
+                out = values[idx];
+                return true;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    void insert(std::uint32_t key, u64 value) {
+        if (keys.empty() || (used + 1) * 10 >= keys.size() * 7) {
+            const std::size_t next = keys.empty() ? 64 : keys.size() * 2;
+            rehash(next);
+        }
+        const std::size_t mask = keys.size() - 1;
+        std::size_t idx = hash(key) & mask;
+        while (true) {
+            const std::uint32_t cur = keys[idx];
+            if (cur == kEmpty) {
+                keys[idx] = key;
+                values[idx] = value;
+                ++used;
+                return;
+            }
+            if (cur == key) {
+                values[idx] = value;
+                return;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+};
+
+struct Solver400 {
+    int n = 0;
+    std::vector<int> sg;
+    std::vector<FlatMap> cache;
+    u64 nodes = 0;
+
+    explicit Solver400(int n) : n(n), sg(n + 1, 0), cache(n + 1) {
+        if (n >= 1) {
+            sg[1] = 0;
+        }
+        if (n >= 2) {
+            sg[2] = 1;
+        }
+        for (int i = 3; i <= n; ++i) {
+            sg[i] = (1 + sg[i - 1]) ^ (1 + sg[i - 2]);
+        }
+    }
+
+    u64 prune(int tree_size, int target) {
+        if (target == -1) {
+            return 1;
+        }
+        if (target < -1) {
+            return 0;
+        }
+        if (tree_size == 1) {
+            return 0;
+        }
+        if (tree_size == 2) {
+            return target == 0 ? 1 : 0;
+        }
+
+        FlatMap& memo = cache[tree_size];
+        u64 cached = 0;
+        if (memo.get(static_cast<std::uint32_t>(target), cached)) {
+            return cached;
+        }
+
+        ++nodes;
+        const int right_target = ((sg[tree_size - 1] + 1) ^ target) - 1;
+        const int left_target = ((sg[tree_size - 2] + 1) ^ target) - 1;
+        const u64 right = prune(tree_size - 2, right_target);
+        const u64 left = prune(tree_size - 1, left_target);
+        u64 res = right + left;
+        if (res >= kMod) {
+            res -= kMod;
+        }
+        memo.insert(static_cast<std::uint32_t>(target), res);
+        return res;
+    }
+};
+
+u64 f_mod(const int target_k) {
+    Solver400 solver(target_k);
+    return solver.prune(target_k, 0);
 }
 
 bool run_checkpoints() {

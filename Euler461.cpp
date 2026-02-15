@@ -4,7 +4,6 @@
 #include <iostream>
 #include <limits>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace {
@@ -78,80 +77,17 @@ int compute_kmax(const int n) {
     return k;
 }
 
-u64 prefix_pairs(const int q, const int kmax) {
-    const u64 qq = static_cast<u64>(q);
-    const u64 km = static_cast<u64>(kmax + 1);
-    return qq * km - (qq * (qq - 1ULL)) / 2ULL;
+inline void update_best(const long double error, const u64 g, long double& best_error, u64& best_g) {
+    constexpr long double eps = 1e-21L;
+    if (error + eps < best_error) {
+        best_error = error;
+        best_g = g;
+    } else if (std::fabs(error - best_error) <= eps && g < best_g) {
+        best_g = g;
+    }
 }
 
-int find_boundary_for_target(const u64 target, const int kmax) {
-    int lo = 0;
-    int hi = kmax + 1;
-    while (lo < hi) {
-        const int mid = lo + (hi - lo) / 2;
-        if (prefix_pairs(mid, kmax) >= target) {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    return lo;
-}
-
-std::vector<PairEntry> build_pairs(const std::vector<double>& values, int thread_count) {
-    const int kmax = static_cast<int>(values.size()) - 1;
-    const u64 total_pairs = prefix_pairs(kmax + 1, kmax);
-    std::vector<PairEntry> pairs(static_cast<std::size_t>(total_pairs));
-
-    if (thread_count <= 0) {
-        thread_count = static_cast<int>(std::thread::hardware_concurrency());
-    }
-    if (thread_count <= 0) {
-        thread_count = 4;
-    }
-    thread_count = std::min(thread_count, kmax + 1);
-
-    std::vector<int> boundaries(static_cast<std::size_t>(thread_count + 1), 0);
-    boundaries[0] = 0;
-    boundaries[static_cast<std::size_t>(thread_count)] = kmax + 1;
-    for (int t = 1; t < thread_count; ++t) {
-        const u64 target =
-            (total_pairs * static_cast<u64>(t)) / static_cast<u64>(thread_count);
-        boundaries[static_cast<std::size_t>(t)] = find_boundary_for_target(target, kmax);
-    }
-
-    std::vector<u32> sq(static_cast<std::size_t>(kmax + 1), 0U);
-    for (int i = 0; i <= kmax; ++i) {
-        sq[static_cast<std::size_t>(i)] = static_cast<u32>(i) * static_cast<u32>(i);
-    }
-
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(thread_count));
-    for (int t = 0; t < thread_count; ++t) {
-        workers.emplace_back([&, t]() {
-            const int ibegin = boundaries[static_cast<std::size_t>(t)];
-            const int iend = boundaries[static_cast<std::size_t>(t + 1)];
-            std::size_t out = static_cast<std::size_t>(prefix_pairs(ibegin, kmax));
-
-            for (int i = ibegin; i < iend; ++i) {
-                const double vi = values[static_cast<std::size_t>(i)];
-                const u32 i_sq = sq[static_cast<std::size_t>(i)];
-                for (int j = i; j <= kmax; ++j) {
-                    pairs[out].sum = vi + values[static_cast<std::size_t>(j)];
-                    pairs[out].sq = i_sq + sq[static_cast<std::size_t>(j)];
-                    ++out;
-                }
-            }
-        });
-    }
-    for (std::thread& w : workers) {
-        w.join();
-    }
-
-    return pairs;
-}
-
-u64 solve(const int n, const int thread_count) {
+u64 solve(const int n, int thread_count) {
     const long double pi = std::acos(-1.0L);
 
     const int kmax = compute_kmax(n);
@@ -161,34 +97,77 @@ u64 solve(const int n, const int thread_count) {
             static_cast<double>(std::expm1(static_cast<long double>(k) / n));
     }
 
-    std::vector<PairEntry> pairs = build_pairs(values, thread_count);
-    std::sort(pairs.begin(), pairs.end(), [](const PairEntry& a, const PairEntry& b) {
-        if (a.sum < b.sum) {
-            return true;
+    std::vector<u32> sq(static_cast<std::size_t>(kmax + 1), 0U);
+    for (int i = 0; i <= kmax; ++i) {
+        sq[static_cast<std::size_t>(i)] = static_cast<u32>(i) * static_cast<u32>(i);
+    }
+
+    if (thread_count <= 0) {
+        thread_count = 1;
+    }
+    (void)thread_count;
+
+    constexpr double delta = 0.001;
+    std::vector<PairEntry> small_sums;
+    std::vector<PairEntry> large_sums;
+    small_sums.reserve(20'000'000);
+    large_sums.reserve(20'000'000);
+
+    for (int a = 0; a <= kmax; ++a) {
+        const double ea = values[static_cast<std::size_t>(a)];
+        if (4.0 * ea > static_cast<double>(pi) + delta) {
+            break;
         }
-        if (a.sum > b.sum) {
-            return false;
+        const u32 a_sq = sq[static_cast<std::size_t>(a)];
+        for (int b = a; b <= kmax; ++b) {
+            const double eb = values[static_cast<std::size_t>(b)];
+            if (ea + 3.0 * eb > static_cast<double>(pi) + delta) {
+                break;
+            }
+            small_sums.push_back({ea + eb, a_sq + sq[static_cast<std::size_t>(b)]});
         }
-        return a.sq < b.sq;
+    }
+
+    for (int d = kmax; d >= 0; --d) {
+        const double ed = values[static_cast<std::size_t>(d)];
+        if (ed > static_cast<double>(pi) + delta) {
+            continue;
+        }
+        if (4.0 * ed < static_cast<double>(pi) - delta) {
+            break;
+        }
+        const u32 d_sq = sq[static_cast<std::size_t>(d)];
+        for (int c = d; c >= 0; --c) {
+            const double ec = values[static_cast<std::size_t>(c)];
+            if (ec + ed > static_cast<double>(pi) + delta) {
+                continue;
+            }
+            if (ed + 3.0 * ec < static_cast<double>(pi) - delta) {
+                break;
+            }
+            large_sums.push_back({ec + ed, d_sq + sq[static_cast<std::size_t>(c)]});
+        }
+    }
+
+    std::sort(small_sums.begin(), small_sums.end(), [](const PairEntry& a, const PairEntry& b) {
+        return (a.sum < b.sum) || (a.sum == b.sum && a.sq < b.sq);
+    });
+    std::sort(large_sums.begin(), large_sums.end(), [](const PairEntry& a, const PairEntry& b) {
+        return (a.sum < b.sum) || (a.sum == b.sum && a.sq < b.sq);
     });
 
     std::size_t left = 0;
-    std::size_t right = pairs.size() - 1;
+    std::size_t right = large_sums.size() - 1;
     long double best_error = std::numeric_limits<long double>::infinity();
     u64 best_g = std::numeric_limits<u64>::max();
 
-    while (left <= right) {
+    while (left < small_sums.size()) {
         const long double total =
-            static_cast<long double>(pairs[left].sum) + static_cast<long double>(pairs[right].sum);
+            static_cast<long double>(small_sums[left].sum) +
+            static_cast<long double>(large_sums[right].sum);
         const long double error = std::fabs(total - pi);
-        const u64 g = static_cast<u64>(pairs[left].sq) + static_cast<u64>(pairs[right].sq);
-
-        if (error + 1e-21L < best_error) {
-            best_error = error;
-            best_g = g;
-        } else if (std::fabs(error - best_error) <= 1e-21L && g < best_g) {
-            best_g = g;
-        }
+        const u64 g = static_cast<u64>(small_sums[left].sq) + static_cast<u64>(large_sums[right].sq);
+        update_best(error, g, best_error, best_g);
 
         if (total > pi) {
             if (right == 0U) {
@@ -199,7 +178,6 @@ u64 solve(const int n, const int thread_count) {
             ++left;
         }
     }
-
     return best_g;
 }
 

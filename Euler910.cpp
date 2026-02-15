@@ -1,8 +1,7 @@
 #include <cstdint>
-#include <future>
+#include <memory>
 #include <iomanip>
 #include <iostream>
-#include <unordered_map>
 #include <vector>
 
 using namespace std;
@@ -31,11 +30,93 @@ struct Func {
     virtual ~Func() = default;
 };
 
+struct FlatMap {
+    vector<uint32_t> keys;
+    vector<uint32_t> values;
+    size_t used = 0;
+
+    static constexpr uint32_t kEmpty = 0xFFFFFFFFu;
+
+    static uint32_t hash(uint32_t x) {
+        x ^= x >> 16;
+        x *= 0x7feb352d;
+        x ^= x >> 15;
+        x *= 0x846ca68b;
+        x ^= x >> 16;
+        return x;
+    }
+
+    void rehash(size_t cap) {
+        vector<uint32_t> old_keys = std::move(keys);
+        vector<uint32_t> old_values = std::move(values);
+        keys.assign(cap, kEmpty);
+        values.assign(cap, 0);
+        used = 0;
+        for (size_t i = 0; i < old_keys.size(); ++i) {
+            if (old_keys[i] != kEmpty) {
+                insert(old_keys[i], old_values[i]);
+            }
+        }
+    }
+
+    void reserve(size_t cap) {
+        size_t pow2 = 1;
+        while (pow2 < cap) {
+            pow2 <<= 1;
+        }
+        if (pow2 > keys.size()) {
+            rehash(pow2);
+        }
+    }
+
+    bool get(uint32_t key, uint32_t& out) const {
+        if (keys.empty()) {
+            return false;
+        }
+        const size_t mask = keys.size() - 1;
+        size_t idx = hash(key) & mask;
+        while (true) {
+            const uint32_t cur = keys[idx];
+            if (cur == kEmpty) {
+                return false;
+            }
+            if (cur == key) {
+                out = values[idx];
+                return true;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    void insert(uint32_t key, uint32_t value) {
+        if (keys.empty() || (used + 1) * 10 >= keys.size() * 7) {
+            const size_t next = keys.empty() ? 64 : keys.size() * 2;
+            rehash(next);
+        }
+        const size_t mask = keys.size() - 1;
+        size_t idx = hash(key) & mask;
+        while (true) {
+            const uint32_t cur = keys[idx];
+            if (cur == kEmpty) {
+                keys[idx] = key;
+                values[idx] = value;
+                ++used;
+                return;
+            }
+            if (cur == key) {
+                values[idx] = value;
+                return;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+};
+
 struct IterFunc {
     Func* func;
     uint32_t steps;
     int maxbit;
-    vector<unordered_map<uint32_t, uint32_t>> jump;
+    vector<FlatMap> jump;
 
     IterFunc(Func* f, uint32_t steps) : func(f), steps(steps) {
         maxbit = 0;
@@ -49,9 +130,9 @@ struct IterFunc {
 
     uint32_t jump_k(int k, uint32_t x) {
         auto& mp = jump[k];
-        auto it = mp.find(x);
-        if (it != mp.end()) {
-            return it->second;
+        uint32_t cached;
+        if (mp.get(x, cached)) {
+            return cached;
         }
         uint32_t y;
         if (k == 0) {
@@ -60,7 +141,7 @@ struct IterFunc {
             uint32_t mid = jump_k(k - 1, x);
             y = jump_k(k - 1, mid);
         }
-        mp.emplace(x, y);
+        mp.insert(x, y);
         return y;
     }
 
@@ -83,32 +164,37 @@ struct IterFunc {
 
 struct FuncC : Func {
     uint32_t c;
+    FlatMap cache;
     explicit FuncC(uint32_t c) : c(c) {}
 
     uint32_t eval(uint32_t x) override {
-        // f_c(x) = (x + 1) * x^c (mod MOD)
-        return mul_mod(x + 1u, pow_mod(x, c));
+        uint32_t cached;
+        if (cache.get(x, cached)) {
+            return cached;
+        }
+        uint32_t res = mul_mod(x + 1u, pow_mod(x, c));
+        cache.insert(x, res);
+        return res;
     }
 };
 
 struct FuncLevel0 : Func {
     FuncC* base;
     IterFunc* iter_base;
-    unordered_map<uint32_t, uint32_t> cache;
+    FlatMap cache;
 
     FuncLevel0(FuncC* base, IterFunc* iter_base) : base(base), iter_base(iter_base) {}
 
     uint32_t eval(uint32_t x) override {
-        auto it = cache.find(x);
-        if (it != cache.end()) {
-            return it->second;
+        uint32_t cached;
+        if (cache.get(x, cached)) {
+            return cached;
         }
-        // f0(x) = f_c( f_c^b(x * f_c(x)) )
         uint32_t fx = base->eval(x);
         uint32_t start = mul_mod(x, fx);
         uint32_t w = iter_base->apply(start);
         uint32_t res = base->eval(w);
-        cache.emplace(x, res);
+        cache.insert(x, res);
         return res;
     }
 };
@@ -116,20 +202,19 @@ struct FuncLevel0 : Func {
 struct FuncLevelN : Func {
     Func* prev;
     IterFunc* iter_prev;
-    unordered_map<uint32_t, uint32_t> cache;
+    FlatMap cache;
 
     FuncLevelN(Func* prev, IterFunc* iter_prev) : prev(prev), iter_prev(iter_prev) {}
 
     uint32_t eval(uint32_t x) override {
-        auto it = cache.find(x);
-        if (it != cache.end()) {
-            return it->second;
+        uint32_t cached;
+        if (cache.get(x, cached)) {
+            return cached;
         }
-        // f_i(x) = f_{i-1}^b(x * f_{i-1}(x))
         uint32_t fx = prev->eval(x);
         uint32_t start = mul_mod(x, fx);
         uint32_t res = iter_prev->apply(start);
-        cache.emplace(x, res);
+        cache.insert(x, res);
         return res;
     }
 };
@@ -139,6 +224,7 @@ public:
     Evaluator(uint32_t a, uint32_t b, uint32_t c) : a_(a), b_(b), c_(c), base_(c_), iter_base_(&base_, b_) {
         funcs_.reserve(a_ + 1);
         iters_.reserve(a_ + 1);
+        base_.cache.reserve(1 << 12);
 
         funcs_.push_back(make_unique<FuncLevel0>(&base_, &iter_base_));
         iters_.push_back(make_unique<IterFunc>(funcs_[0].get(), b_));
@@ -197,15 +283,13 @@ int main() {
     const uint32_t d = 678;
     const uint32_t e = 90;
 
-    auto validation = std::async(std::launch::async, run_validation);
+    if (!run_validation()) {
+        return 1;
+    }
 
     Evaluator eval(a, b, c);
     uint32_t k = eval.compute(d);
     uint32_t result = (k + e) % MOD;
-
-    if (!validation.get()) {
-        return 1;
-    }
 
     cout << setw(9) << setfill('0') << result << "\n";
     return 0;

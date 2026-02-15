@@ -1,9 +1,10 @@
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <iostream>
-#include <numeric>
+#include <limits>
+#include <pthread.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -11,6 +12,17 @@ namespace {
 using u64 = std::uint64_t;
 using u128 = unsigned __int128;
 using i64 = std::int64_t;
+
+constexpr u64 kDefaultN = 100'000'000'000ULL;
+constexpr int kDefaultM = 100'000'000;
+
+struct Options {
+    u64 n = kDefaultN;
+    int m = kDefaultM;
+    bool run_checkpoints = true;
+    bool allow_multithreading = true;
+    unsigned requested_threads = 0U;
+};
 
 std::string to_string_u128(u128 v) {
     if (v == 0) return "0";
@@ -23,142 +35,224 @@ std::string to_string_u128(u128 v) {
     return s;
 }
 
+bool parse_u64_after_prefix(const std::string& arg, const char* prefix, u64& value) {
+    const std::string p(prefix);
+    if (arg.rfind(p, 0) != 0) {
+        return false;
+    }
+    const std::string tail = arg.substr(p.size());
+    if (tail.empty()) {
+        return false;
+    }
+    u64 parsed = 0ULL;
+    for (const char ch : tail) {
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        const u64 digit = static_cast<u64>(ch - '0');
+        if (parsed > (std::numeric_limits<u64>::max() - digit) / 10ULL) {
+            return false;
+        }
+        parsed = parsed * 10ULL + digit;
+    }
+    value = parsed;
+    return true;
+}
+
+bool parse_int_after_prefix(const std::string& arg, const char* prefix, int& value) {
+    u64 parsed = 0ULL;
+    if (!parse_u64_after_prefix(arg, prefix, parsed)) {
+        return false;
+    }
+    if (parsed > static_cast<u64>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+bool parse_unsigned_after_prefix(const std::string& arg,
+                                 const char* prefix,
+                                 unsigned& value) {
+    u64 parsed = 0ULL;
+    if (!parse_u64_after_prefix(arg, prefix, parsed)) {
+        return false;
+    }
+    if (parsed > static_cast<u64>(std::numeric_limits<unsigned>::max())) {
+        return false;
+    }
+    value = static_cast<unsigned>(parsed);
+    return true;
+}
+
+bool parse_arguments(int argc, char** argv, Options& options) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg == "--skip-checkpoints") {
+            options.run_checkpoints = false;
+            continue;
+        }
+        if (arg == "--single-thread") {
+            options.allow_multithreading = false;
+            continue;
+        }
+        if (parse_u64_after_prefix(arg, "--n=", options.n)) {
+            continue;
+        }
+        if (parse_int_after_prefix(arg, "--m=", options.m)) {
+            continue;
+        }
+        if (parse_unsigned_after_prefix(arg, "--threads=", options.requested_threads)) {
+            continue;
+        }
+        std::cerr << "Unknown argument: " << arg << '\n';
+        return false;
+    }
+    return true;
+}
+
 std::vector<int> sieve_primes(const int n) {
-    std::vector<bool> is_prime(static_cast<std::size_t>(n + 1), true);
-    if (n >= 0) is_prime[0] = false;
-    if (n >= 1) is_prime[1] = false;
+    std::vector<bool> sieve(static_cast<std::size_t>(n) + 1, true);
+    if (n >= 0) sieve[0] = false;
+    if (n >= 1) sieve[1] = false;
     for (int p = 2; static_cast<i64>(p) * p <= n; ++p) {
-        if (!is_prime[static_cast<std::size_t>(p)]) continue;
+        if (!sieve[static_cast<std::size_t>(p)]) continue;
         for (int q = p * p; q <= n; q += p) {
-            is_prime[static_cast<std::size_t>(q)] = false;
+            sieve[static_cast<std::size_t>(q)] = false;
         }
     }
     std::vector<int> primes;
+    primes.reserve(n / 10);
     for (int i = 2; i <= n; ++i) {
-        if (is_prime[static_cast<std::size_t>(i)]) primes.push_back(i);
+        if (sieve[static_cast<std::size_t>(i)]) primes.push_back(i);
     }
     return primes;
+}
+
+u64 gcd_u64(u64 a, u64 b) {
+    while (b != 0) {
+        u64 t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
 }
 
 u64 mod_pow(u64 a, u64 e, u64 mod) {
     u64 r = 1 % mod;
     u64 x = a % mod;
     while (e > 0) {
-        if (e & 1ULL) {
-            r = static_cast<u64>((static_cast<u128>(r) * x) % mod);
-        }
-        x = static_cast<u64>((static_cast<u128>(x) * x) % mod);
+        if (e & 1ULL) r = (r * x) % mod;
+        x = (x * x) % mod;
         e >>= 1ULL;
     }
     return r;
 }
 
-i64 ext_gcd(i64 a, i64 b, i64& x, i64& y) {
-    if (b == 0) {
-        x = 1;
-        y = 0;
-        return a;
-    }
-    i64 x1 = 0;
-    i64 y1 = 0;
-    const i64 g = ext_gcd(b, a % b, x1, y1);
-    x = y1;
-    y = x1 - (a / b) * y1;
-    return g;
-}
-
-u64 mod_inv(u64 a, u64 mod) {
-    i64 x = 0;
-    i64 y = 0;
-    const i64 g = ext_gcd(static_cast<i64>(a), static_cast<i64>(mod), x, y);
-    if (g != 1) return 0;
-    i64 r = x % static_cast<i64>(mod);
-    if (r < 0) r += static_cast<i64>(mod);
-    return static_cast<u64>(r);
-}
-
-std::vector<u64> distinct_prime_factors(u64 n, const std::vector<int>& small_primes) {
-    std::vector<u64> f;
-    u64 x = n;
-    for (const int p : small_primes) {
-        const u64 pp = static_cast<u64>(p);
-        if (pp * pp > x) break;
-        if (x % pp != 0) continue;
-        f.push_back(pp);
-        while (x % pp == 0) x /= pp;
-    }
-    if (x > 1) f.push_back(x);
-    return f;
-}
-
-u64 primitive_root_prime(const u64 p, const std::vector<u64>& factors) {
-    const u64 phi = p - 1;
-    for (u64 g = 2; g < p; ++g) {
+u64 primitive_root_of_unity(u64 p, u64 d) {
+    if (d == 1) return 1;
+    for (u64 a = 2; ; ++a) {
+        u64 h = mod_pow(a, (p - 1) / d, p);
+        u64 z = 1;
         bool ok = true;
-        for (const u64 q : factors) {
-            if (mod_pow(g, phi / q, p) == 1ULL) {
+        for (u64 i = 1; i < d; ++i) {
+            z = (z * h) % p;
+            if (z == 1) {
                 ok = false;
                 break;
             }
         }
-        if (ok) return g;
+        if (ok) return h;
     }
-    return 0;
 }
 
-u64 count_roots_leq_rem(const u64 p, const u64 rem, const int d, const std::vector<int>& small_primes) {
-    if (d == 1) {
-        return (rem == p - 1) ? 1ULL : 0ULL;
+struct SumTask {
+    const std::vector<int>* primes = nullptr;
+    std::size_t start = 0;
+    std::size_t end = 0;
+    u64 n = 0;
+    u128 sum = 0;
+};
+
+static void* sum_worker(void* arg) {
+    auto* task = static_cast<SumTask*>(arg);
+    const auto& primes = *task->primes;
+    const u64 n = task->n;
+    u128 local = 0;
+    for (std::size_t i = task->start; i < task->end; ++i) {
+        const u64 p = static_cast<u64>(primes[i]);
+        const u64 d = gcd_u64(15, p - 1);
+        const u64 r = primitive_root_of_unity(p, d);
+        u64 h = p - 1;
+        for (u64 j = 0; j < d; ++j) {
+            h = (h * r) % p;
+            local += static_cast<u128>((n + p - h) / p) * static_cast<u128>(p);
+        }
     }
-
-    const u64 q = p - 1;
-    const u64 mod = q / static_cast<u64>(d);
-    const u64 a = 15ULL / static_cast<u64>(d);
-    const u64 b = (q / 2ULL) / static_cast<u64>(d);
-    const u64 inv_a = mod_inv(a % mod, mod);
-    const u64 k0 = static_cast<u64>((static_cast<u128>(b) * inv_a) % mod);
-
-    const auto factors = distinct_prime_factors(q, small_primes);
-    const u64 g = primitive_root_prime(p, factors);
-    const u64 r0 = mod_pow(g, k0, p);
-    const u64 step = mod_pow(g, mod, p);
-
-    u64 count = 0;
-    u64 r = r0;
-    for (int i = 0; i < d; ++i) {
-        if (r <= rem) ++count;
-        r = static_cast<u64>((static_cast<u128>(r) * step) % p);
-    }
-    return count;
+    task->sum = local;
+    return nullptr;
 }
 
-u128 fast_sum(const u64 n_limit, const int p_limit) {
-    const auto primes = sieve_primes(p_limit);
-    const auto small_primes = sieve_primes(static_cast<int>(std::sqrt(static_cast<long double>(p_limit)) + 1.0L));
+unsigned thread_count(bool allow_multithreading, unsigned requested_threads) {
+    if (!allow_multithreading) {
+        return 1U;
+    }
+    unsigned threads = requested_threads;
+    if (threads == 0U) {
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        if (n < 1) n = 1;
+        threads = static_cast<unsigned>(n);
+    }
+    return std::max(1U, threads);
+}
+
+u128 sum_for(u64 n, int m, bool allow_multithreading, unsigned requested_threads) {
+    const auto primes = sieve_primes(m);
+    if (primes.empty()) {
+        return 0;
+    }
+
+    const unsigned threads = thread_count(allow_multithreading, requested_threads);
+    if (threads < 2U || primes.size() < 20000U) {
+        u128 total = 0;
+        for (int p_int : primes) {
+            const u64 p = static_cast<u64>(p_int);
+            const u64 d = gcd_u64(15, p - 1);
+            const u64 r = primitive_root_of_unity(p, d);
+            u64 h = p - 1;
+            for (u64 j = 0; j < d; ++j) {
+                h = (h * r) % p;
+                total += static_cast<u128>((n + p - h) / p) * static_cast<u128>(p);
+            }
+        }
+        return total;
+    }
+
+    const std::size_t count = primes.size();
+    const unsigned active = std::min<unsigned>(threads, static_cast<unsigned>(count));
+    const std::size_t block = (count + active - 1) / active;
+    std::vector<SumTask> tasks(active);
+    std::vector<pthread_t> workers(active);
+
+    for (unsigned t = 0; t < active; ++t) {
+        const std::size_t start = static_cast<std::size_t>(t) * block;
+        const std::size_t end = std::min(count, start + block);
+        tasks[t] = {&primes, start, end, n, 0};
+        pthread_create(&workers[t], nullptr, sum_worker, &tasks[t]);
+    }
 
     u128 total = 0;
-    for (const int p_int : primes) {
-        const u64 p = static_cast<u64>(p_int);
-        if (p == 2ULL) {
-            const u64 cnt = n_limit / 2ULL + (n_limit % 2ULL);
-            total += static_cast<u128>(2ULL) * cnt;
-            continue;
-        }
-
-        const u64 qn = n_limit / p;
-        const u64 rem = n_limit - qn * p;
-        const int d = std::gcd(15, static_cast<int>(p - 1ULL));
-        const u64 t = count_roots_leq_rem(p, rem, d, small_primes);
-        const u128 cnt = static_cast<u128>(d) * static_cast<u128>(qn) + static_cast<u128>(t);
-        total += static_cast<u128>(p) * cnt;
+    for (unsigned t = 0; t < active; ++t) {
+        pthread_join(workers[t], nullptr);
+        total += tasks[t].sum;
     }
     return total;
 }
 
-u64 s_single_bruteforce(const u64 n, const int m) {
+u64 s_single_bruteforce(u64 n, int m) {
     const auto primes = sieve_primes(m);
     u64 sum = 0;
-    for (const int p_int : primes) {
+    for (int p_int : primes) {
         const u64 p = static_cast<u64>(p_int);
         const u64 r = mod_pow(n % p, 15ULL, p);
         if ((r + 1ULL) % p == 0ULL) sum += p;
@@ -166,7 +260,7 @@ u64 s_single_bruteforce(const u64 n, const int m) {
     return sum;
 }
 
-u128 brute_small(const u64 n_limit, const int m) {
+u128 brute_small(u64 n_limit, int m) {
     u128 s = 0;
     for (u64 n = 1; n <= n_limit; ++n) {
         s += s_single_bruteforce(n, m);
@@ -179,32 +273,25 @@ bool run_checkpoints() {
     if (s_single_bruteforce(2ULL, 1000) != 345ULL) return false;
     if (s_single_bruteforce(10ULL, 100) != 31ULL) return false;
     if (s_single_bruteforce(10ULL, 1000) != 483ULL) return false;
-
-    if (fast_sum(200ULL, 1000) != brute_small(200ULL, 1000)) return false;
-    if (fast_sum(1000ULL, 5000) != brute_small(1000ULL, 5000)) return false;
+    if (sum_for(200ULL, 1000, false, 1) != brute_small(200ULL, 1000)) return false;
+    if (sum_for(1000ULL, 5000, false, 1) != brute_small(1000ULL, 5000)) return false;
     return true;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    bool skip_checkpoints = false;
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg(argv[i]);
-        if (arg == "--skip-checkpoints") {
-            skip_checkpoints = true;
-        } else {
-            std::cerr << "Unknown argument: " << arg << '\n';
-            return 1;
-        }
+    Options options;
+    if (!parse_arguments(argc, argv, options)) {
+        return 1;
     }
 
-    if (!skip_checkpoints && !run_checkpoints()) {
+    if (options.run_checkpoints && !run_checkpoints()) {
         std::cerr << "Checkpoint failed\n";
         return 2;
     }
 
-    const u128 ans = fast_sum(100000000000ULL, 100000000);
+    const u128 ans = sum_for(options.n, options.m, options.allow_multithreading, options.requested_threads);
     std::cout << to_string_u128(ans) << '\n';
     return 0;
 }

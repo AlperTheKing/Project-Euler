@@ -1,10 +1,8 @@
-#include <algorithm>
-#include <array>
 #include <cstdint>
 #include <iostream>
 #include <limits>
 #include <string>
-#include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -15,14 +13,10 @@ using u128 = unsigned __int128;
 
 constexpr u64 kMod = 1'000'000'007ULL;
 constexpr u64 kDefaultN = 100'000'000ULL;
-constexpr u64 kDefaultDirectLimit = 220'000ULL;
 
 struct Options {
     u64 n = kDefaultN;
-    u64 direct_limit = kDefaultDirectLimit;
     bool run_checkpoints = true;
-    bool allow_multithreading = true;
-    unsigned requested_threads = 0U;
 };
 
 bool parse_u64_after_prefix(const std::string& arg, const char* prefix, u64& value) {
@@ -52,325 +46,163 @@ bool parse_u64_after_prefix(const std::string& arg, const char* prefix, u64& val
     return true;
 }
 
-bool parse_unsigned_after_prefix(const std::string& arg,
-                                 const char* prefix,
-                                 unsigned& value) {
-    u64 parsed = 0ULL;
-    if (!parse_u64_after_prefix(arg, prefix, parsed)) {
-        return false;
-    }
-    if (parsed > static_cast<u64>(std::numeric_limits<unsigned>::max())) {
-        return false;
-    }
-    value = static_cast<unsigned>(parsed);
-    return true;
-}
-
 bool parse_arguments(const int argc, char** argv, Options& options) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-
         if (arg == "--skip-checkpoints") {
             options.run_checkpoints = false;
             continue;
         }
-        if (arg == "--single-thread") {
-            options.allow_multithreading = false;
+        u64 parsed = 0ULL;
+        if (parse_u64_after_prefix(arg, "--n=", parsed)) {
+            options.n = parsed;
             continue;
         }
-
-        u64 parsed_u64 = 0ULL;
-        if (parse_u64_after_prefix(arg, "--n=", parsed_u64)) {
-            options.n = parsed_u64;
-            continue;
-        }
-        if (parse_u64_after_prefix(arg, "--direct-limit=", parsed_u64)) {
-            options.direct_limit = parsed_u64;
-            continue;
-        }
-
-        unsigned parsed_unsigned = 0U;
-        if (parse_unsigned_after_prefix(arg, "--threads=", parsed_unsigned)) {
-            options.requested_threads = parsed_unsigned;
-            continue;
-        }
-
         std::cerr << "Unknown argument: " << arg << '\n';
         return false;
     }
-
-    if (options.direct_limit < 2ULL) {
-        std::cerr << "--direct-limit must be >= 2.\n";
-        return false;
-    }
-    if (options.direct_limit > static_cast<u64>(std::numeric_limits<int>::max())) {
-        std::cerr << "--direct-limit is too large for this implementation.\n";
-        return false;
-    }
-    if (options.run_checkpoints && options.direct_limit < 10'000ULL) {
-        std::cerr << "--direct-limit must be >= 10000 when checkpoints are enabled.\n";
-        return false;
-    }
-
     return true;
 }
 
-u64 next_sequence_value(const u64 x) {
+inline u64 next_value(const u64 x) {
     return static_cast<u64>((static_cast<u128>(x) * static_cast<u128>(x) + 45ULL) % kMod);
 }
 
-struct CycleInfo {
-    u64 mu = 0ULL;
-    u64 lambda = 0ULL;
-};
+i64 compute_score(const std::vector<int>& seq) {
+    std::vector<i64> stack;
+    stack.reserve(seq.size());
 
-CycleInfo find_cycle_brent(const u64 x0) {
-    u64 power = 1ULL;
-    u64 lambda = 1ULL;
-    u64 tortoise = x0;
-    u64 hare = next_sequence_value(x0);
-
-    while (tortoise != hare) {
-        if (power == lambda) {
-            tortoise = hare;
-            power <<= 1U;
-            lambda = 0ULL;
+    i64 sum = 0;
+    for (int v : seq) {
+        sum += v;
+        stack.push_back(static_cast<i64>(v));
+        while (stack.size() >= 3) {
+            const std::size_t n = stack.size();
+            const i64 a = stack[n - 3];
+            const i64 b = stack[n - 2];
+            const i64 c = stack[n - 1];
+            if (b < a || b < c) {
+                break;
+            }
+            stack[n - 3] = a - b + c;
+            stack.resize(n - 2);
         }
-        hare = next_sequence_value(hare);
-        ++lambda;
     }
 
-    u64 mu = 0ULL;
-    tortoise = x0;
-    hare = x0;
-    for (u64 i = 0ULL; i < lambda; ++i) {
-        hare = next_sequence_value(hare);
-    }
-    while (tortoise != hare) {
-        tortoise = next_sequence_value(tortoise);
-        hare = next_sequence_value(hare);
-        ++mu;
+    i64 delta = 0;
+    std::size_t i = 0;
+    std::size_t j = (stack.empty() ? 0 : stack.size() - 1);
+    int sign = 1;
+    while (!stack.empty() && i <= j) {
+        if (stack[i] > stack[j]) {
+            delta += sign * stack[i];
+            ++i;
+        } else {
+            delta += sign * stack[j];
+            if (j == 0) {
+                break;
+            }
+            --j;
+        }
+        sign = -sign;
     }
 
-    return CycleInfo{mu, lambda};
+    return (sum + delta) / 2;
 }
 
-std::vector<std::uint32_t> generate_sequence_prefix(const int n) {
-    std::vector<std::uint32_t> seq(static_cast<std::size_t>(n), 0U);
-    if (n <= 1) {
-        return seq;
-    }
-
-    u64 x = 0ULL;
-    for (int i = 1; i < n; ++i) {
-        x = next_sequence_value(x);
-        seq[static_cast<std::size_t>(i)] = static_cast<std::uint32_t>(x);
-    }
-    return seq;
-}
-
-std::vector<i64> compute_f_table(const std::vector<std::uint32_t>& seq) {
-    const int n = static_cast<int>(seq.size());
-    std::vector<i64> f(static_cast<std::size_t>(n + 1), 0LL);
+i64 solve_n(const u64 n) {
     if (n == 0) {
-        return f;
+        return 0;
     }
 
-    std::vector<i64> prefix(static_cast<std::size_t>(n + 1), 0LL);
-    std::vector<i64> prev(static_cast<std::size_t>(n), 0LL);
-    std::vector<i64> cur(static_cast<std::size_t>(n), 0LL);
+    std::unordered_map<int, int> seen;
+    seen.reserve(100000);
+    std::vector<int> prefix;
+    prefix.reserve(100000);
 
-    for (int i = 0; i < n; ++i) {
-        prefix[static_cast<std::size_t>(i + 1)] =
-            prefix[static_cast<std::size_t>(i)] + static_cast<i64>(seq[static_cast<std::size_t>(i)]);
-        prev[static_cast<std::size_t>(i)] = static_cast<i64>(seq[static_cast<std::size_t>(i)]);
-    }
+    int s = 0;
+    int cycle_start = -1;
+    int cycle_len = 0;
 
-    f[1] = (prefix[1] + prev[0]) / 2LL;
-
-    for (int len = 2; len <= n; ++len) {
-        const int upto = n - len;
-        int right = len - 1;
-
-        for (int i = 0; i <= upto; ++i, ++right) {
-            const i64 left_pick =
-                static_cast<i64>(seq[static_cast<std::size_t>(i)]) -
-                prev[static_cast<std::size_t>(i + 1)];
-            const i64 right_pick =
-                static_cast<i64>(seq[static_cast<std::size_t>(right)]) -
-                prev[static_cast<std::size_t>(i)];
-            cur[static_cast<std::size_t>(i)] = (left_pick > right_pick) ? left_pick : right_pick;
+    for (u64 i = 0; i < n; ++i) {
+        auto it = seen.find(s);
+        if (it != seen.end()) {
+            cycle_start = it->second;
+            cycle_len = static_cast<int>(prefix.size()) - cycle_start;
+            break;
         }
-
-        std::swap(prev, cur);
-        f[static_cast<std::size_t>(len)] =
-            (prefix[static_cast<std::size_t>(len)] + prev[0]) / 2LL;
+        seen.emplace(s, static_cast<int>(prefix.size()));
+        prefix.push_back(s);
+        s = static_cast<int>(next_value(static_cast<u64>(s)));
     }
 
-    return f;
-}
+    if (cycle_start < 0) {
+        return compute_score(prefix);
+    }
 
-bool run_problem_checkpoints(const std::vector<i64>& f) {
-    struct Checkpoint {
-        int n;
-        i64 expected;
+    const u64 p = static_cast<u64>(cycle_start);
+    const u64 cycle = static_cast<u64>(cycle_len);
+
+    const u64 a = (n - p) % cycle;
+    const u64 b = cycle - a;
+
+    auto append_range = [&](std::vector<int>& out, u64 start, u64 len) {
+        if (len == 0) {
+            return;
+        }
+        out.insert(out.end(),
+                   prefix.begin() + static_cast<std::ptrdiff_t>(start),
+                   prefix.begin() + static_cast<std::ptrdiff_t>(start + len));
     };
 
+    std::vector<int> U;
+    U.reserve(static_cast<std::size_t>(p + a));
+    append_range(U, 0, p);
+    append_range(U, p, a);
+
+    std::vector<int> V;
+    V.reserve(static_cast<std::size_t>(b + a));
+    append_range(V, p + a, b);
+    append_range(V, p, a);
+
+    std::vector<int> T;
+    T.reserve(U.size() + V.size());
+    T.insert(T.end(), U.begin(), U.end());
+    T.insert(T.end(), V.begin(), V.end());
+
+    const i64 s1 = compute_score(U);
+    const i64 s2 = compute_score(T);
+
+    const u64 u = U.size();
+    const u64 v = V.size();
+    const u64 blocks = (n - u) / v;
+
+    const __int128 result =
+        static_cast<__int128>(s1) +
+        static_cast<__int128>(s2 - s1) * static_cast<__int128>(blocks);
+    return static_cast<i64>(result);
+}
+
+bool run_checkpoints() {
+    struct Checkpoint {
+        u64 n;
+        i64 expected;
+    };
     const Checkpoint checkpoints[] = {
-        {2, 45LL},
-        {4, 4'284'990LL},
-        {100, 26'365'463'243LL},
-        {10'000, 2'495'838'522'951LL},
+        {2, 45},
+        {4, 4'284'990},
+        {100, 26'365'463'243},
+        {10'000, 2'495'838'522'951},
     };
 
     for (const auto& checkpoint : checkpoints) {
-        if (checkpoint.n >= static_cast<int>(f.size())) {
-            std::cerr << "Checkpoint n=" << checkpoint.n
-                      << " is out of range for the current --direct-limit.\n";
-            return false;
-        }
-        const i64 got = f[static_cast<std::size_t>(checkpoint.n)];
+        const i64 got = solve_n(checkpoint.n);
         if (got != checkpoint.expected) {
             std::cerr << "Checkpoint failed at n=" << checkpoint.n
                       << ": got " << got << ", expected " << checkpoint.expected << '\n';
             return false;
         }
     }
-
-    return true;
-}
-
-unsigned choose_thread_count(const bool allow_multithreading, const unsigned requested_threads) {
-    if (!allow_multithreading) {
-        return 1U;
-    }
-
-    unsigned threads = requested_threads;
-    if (threads == 0U) {
-        threads = std::thread::hardware_concurrency();
-        if (threads == 0U) {
-            threads = 1U;
-        }
-    }
-
-    return std::max(1U, threads);
-}
-
-struct AffineInfo {
-    u64 start = 0ULL;
-    i64 delta = 0LL;
-    bool valid = false;
-};
-
-AffineInfo find_affine_for_parity(const std::vector<i64>& f,
-                                  const u64 period,
-                                  const int parity) {
-    const u64 nmax = static_cast<u64>(f.size() - 1U);
-    const u64 first = (parity == 0) ? 2ULL : 1ULL;  // parity=0 -> even n, parity=1 -> odd n
-
-    if (first + period > nmax) {
-        return AffineInfo{};
-    }
-
-    for (u64 start = first; start + period <= nmax; start += 2ULL) {
-        const i64 delta =
-            f[static_cast<std::size_t>(start + period)] - f[static_cast<std::size_t>(start)];
-        bool ok = true;
-        for (u64 n = start; n + period <= nmax; n += 2ULL) {
-            const i64 got =
-                f[static_cast<std::size_t>(n + period)] - f[static_cast<std::size_t>(n)];
-            if (got != delta) {
-                ok = false;
-                break;
-            }
-        }
-        if (ok) {
-            return AffineInfo{start, delta, true};
-        }
-    }
-
-    return AffineInfo{};
-}
-
-std::array<AffineInfo, 2> find_affine_infos(const std::vector<i64>& f,
-                                            const u64 period,
-                                            const bool allow_multithreading,
-                                            const unsigned requested_threads) {
-    std::array<AffineInfo, 2> infos{};
-    const unsigned threads = choose_thread_count(allow_multithreading, requested_threads);
-
-    if (threads >= 2U) {
-        std::thread even_worker([&]() {
-            infos[0] = find_affine_for_parity(f, period, 0);  // even n
-        });
-        infos[1] = find_affine_for_parity(f, period, 1);      // odd n
-        even_worker.join();
-    } else {
-        infos[0] = find_affine_for_parity(f, period, 0);
-        infos[1] = find_affine_for_parity(f, period, 1);
-    }
-
-    return infos;
-}
-
-i64 extrapolated_f(const u64 n,
-                   const std::vector<i64>& f,
-                   const u64 period,
-                   const std::array<AffineInfo, 2>& infos) {
-    if (n < f.size()) {
-        return f[static_cast<std::size_t>(n)];
-    }
-
-    const int parity = static_cast<int>(n & 1ULL);  // 0 even, 1 odd
-    const AffineInfo& info = infos[parity];
-    if (!info.valid || n < info.start) {
-        return -1LL;
-    }
-
-    i64 rem = static_cast<i64>((n - info.start) % period);
-    if (rem < 0LL) {
-        rem += static_cast<i64>(period);
-    }
-
-    const u64 base = info.start + static_cast<u64>(rem);
-    const u64 blocks = (n - base) / period;
-    return f[static_cast<std::size_t>(base)] + static_cast<i64>(blocks) * info.delta;
-}
-
-bool validate_affine_model(const std::vector<i64>& f,
-                           const u64 period,
-                           const std::array<AffineInfo, 2>& infos) {
-    const u64 nmax = static_cast<u64>(f.size() - 1U);
-    for (int parity = 0; parity < 2; ++parity) {
-        if (!infos[parity].valid) {
-            std::cerr << "Could not detect affine-periodic behavior for parity " << parity
-                      << ". Increase --direct-limit.\n";
-            return false;
-        }
-        for (u64 n = infos[parity].start; n + period <= nmax; n += 2ULL) {
-            const i64 got =
-                f[static_cast<std::size_t>(n + period)] - f[static_cast<std::size_t>(n)];
-            if (got != infos[parity].delta) {
-                std::cerr << "Affine validation failed at n=" << n
-                          << " for parity " << parity << ".\n";
-                return false;
-            }
-        }
-    }
-
-    // Extra tail check: the extrapolator must match direct DP values near the window end.
-    const u64 tail_window = std::min<u64>(nmax, 5ULL * period);
-    const u64 begin = nmax - tail_window;
-    for (u64 n = begin; n <= nmax; ++n) {
-        const i64 predicted = extrapolated_f(n, f, period, infos);
-        if (predicted != f[static_cast<std::size_t>(n)]) {
-            std::cerr << "Tail extrapolation mismatch at n=" << n
-                      << ": got " << predicted
-                      << ", expected " << f[static_cast<std::size_t>(n)] << ".\n";
-            return false;
-        }
-    }
-
     return true;
 }
 
@@ -381,48 +213,11 @@ int main(int argc, char** argv) {
     if (!parse_arguments(argc, argv, options)) {
         return 1;
     }
-
-    const CycleInfo cycle = find_cycle_brent(0ULL);
-    if (cycle.lambda == 0ULL) {
-        std::cerr << "Cycle detection failed.\n";
+    if (options.run_checkpoints && !run_checkpoints()) {
         return 1;
     }
 
-    const u64 period = 2ULL * cycle.lambda;
-    if (period > options.direct_limit) {
-        std::cerr << "--direct-limit must be at least " << period
-                  << " for period detection.\n";
-        return 1;
-    }
-
-    const int direct_n = static_cast<int>(options.direct_limit);
-    const std::vector<std::uint32_t> seq = generate_sequence_prefix(direct_n);
-    const std::vector<i64> f = compute_f_table(seq);
-
-    if (options.run_checkpoints) {
-        if (cycle.mu != 57'956ULL || cycle.lambda != 7'248ULL) {
-            std::cerr << "Cycle checkpoint failed: mu=" << cycle.mu
-                      << ", lambda=" << cycle.lambda << ".\n";
-            return 1;
-        }
-        if (!run_problem_checkpoints(f)) {
-            return 1;
-        }
-    }
-
-    const auto infos =
-        find_affine_infos(f, period, options.allow_multithreading, options.requested_threads);
-    if (!validate_affine_model(f, period, infos)) {
-        return 1;
-    }
-
-    const i64 answer = extrapolated_f(options.n, f, period, infos);
-    if (answer < 0LL) {
-        std::cerr << "Could not extrapolate F(" << options.n
-                  << "). Try increasing --direct-limit.\n";
-        return 1;
-    }
-
+    const i64 answer = solve_n(options.n);
     std::cout << answer << '\n';
     return 0;
 }

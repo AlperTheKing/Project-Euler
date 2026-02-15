@@ -216,15 +216,28 @@ struct Item {
 };
 
 std::uint64_t solve(int N, bool exact_small = false) {
-    Ranker ranker;
     std::vector<Item> items;
+    std::vector<std::uint64_t> sequence;
     items.reserve(static_cast<std::size_t>(N));
+    sequence.reserve(static_cast<std::size_t>(N));
 
     std::uint64_t a = 0;
-    for (int i = 1; i <= N; ++i) {
+    for (int i = 0; i < N; ++i) {
         a = (kLcgMul * a + kLcgAdd) % kLcgMod;
-        const auto w = to_digits1(a);
-        items.push_back(Item{ranker.rank_db(kN, w), a});
+        sequence.push_back(a);
+    }
+
+    items.resize(static_cast<std::size_t>(N));
+
+#pragma omp parallel
+    {
+        Ranker ranker;
+
+#pragma omp for
+        for (int i = 0; i < N; ++i) {
+            const auto w = to_digits1(sequence[static_cast<std::size_t>(i)]);
+            items[static_cast<std::size_t>(i)] = {ranker.rank_db(kN, w), sequence[static_cast<std::size_t>(i)]};
+        }
     }
 
     std::sort(items.begin(), items.end(), [](const Item& lhs, const Item& rhs) {

@@ -19,6 +19,7 @@ struct Context {
     uint64_t N = 0;
     const vector<uint32_t>* primes = nullptr;
     const vector<int8_t>* mu = nullptr;
+    const vector<uint32_t>* sqf_d = nullptr;
 };
 
 static uint64_t isqrt_u64(uint64_t x) {
@@ -57,27 +58,51 @@ static uint64_t count_squarefree_coprime(uint64_t x,
                                          const vector<uint32_t>& primes_in_r,
                                          const vector<uint64_t>& divs,
                                          const vector<int8_t>& signs,
-                                         const vector<int8_t>& mu) {
+                                         const vector<int8_t>& mu,
+                                         const vector<uint32_t>& sqf_d) {
     if (x == 0) return 0;
     uint64_t limit = isqrt_u64(x);
+    auto end_it = upper_bound(sqf_d.begin(), sqf_d.end(), static_cast<uint32_t>(limit));
+    const size_t prime_cnt = primes_in_r.size();
+
     int64_t res = 0;
-    for (uint64_t d = 1; d <= limit; ++d) {
-        int8_t mu_d = mu[static_cast<size_t>(d)];
-        if (mu_d == 0) continue;
+    uint64_t last_y = numeric_limits<uint64_t>::max();
+    int64_t last_phi = 0;
+
+    for (auto it = sqf_d.begin(); it != end_it; ++it) {
+        uint64_t d = *it;
         bool ok = true;
-        for (uint32_t p : primes_in_r) {
-            if (d % p == 0) {
-                ok = false;
-                break;
+        if (prime_cnt == 1) {
+            ok = (d % primes_in_r[0] != 0);
+        } else if (prime_cnt == 2) {
+            ok = (d % primes_in_r[0] != 0) && (d % primes_in_r[1] != 0);
+        } else if (prime_cnt == 3) {
+            ok = (d % primes_in_r[0] != 0) && (d % primes_in_r[1] != 0) &&
+                 (d % primes_in_r[2] != 0);
+        } else if (prime_cnt == 4) {
+            ok = (d % primes_in_r[0] != 0) && (d % primes_in_r[1] != 0) &&
+                 (d % primes_in_r[2] != 0) && (d % primes_in_r[3] != 0);
+        } else {
+            for (uint32_t p : primes_in_r) {
+                if (d % p == 0) {
+                    ok = false;
+                    break;
+                }
             }
         }
         if (!ok) continue;
+
+        const int8_t mu_d = mu[static_cast<size_t>(d)];
         uint64_t y = x / (d * d);
-        int64_t phi = 0;
-        for (size_t i = 0; i < divs.size(); ++i) {
-            phi += signs[i] * static_cast<int64_t>(y / divs[i]);
+        if (y != last_y) {
+            int64_t phi = 0;
+            for (size_t i = 0; i < divs.size(); ++i) {
+                phi += signs[i] * static_cast<int64_t>(y / divs[i]);
+            }
+            last_y = y;
+            last_phi = phi;
         }
-        res += mu_d * phi;
+        res += mu_d * last_phi;
     }
     return static_cast<uint64_t>(res);
 }
@@ -98,7 +123,7 @@ static void dfs(int start_idx,
                 u128& acc) {
     // Each node corresponds to one powerful part; squarefree coprime factors are counted separately.
     uint64_t x = ctx.N / curr_u;
-    uint64_t q = count_squarefree_coprime(x, primes_in_r, divs, signs, *ctx.mu);
+    uint64_t q = count_squarefree_coprime(x, primes_in_r, divs, signs, *ctx.mu, *ctx.sqf_d);
     acc += static_cast<u128>(curr_g) * q;
 
     const auto& primes = *ctx.primes;
@@ -171,17 +196,23 @@ static u128 compute_sum(uint64_t N, bool use_threads) {
     uint64_t sqrt_n = isqrt_u64(N);
     vector<uint32_t> primes;
     vector<int8_t> mu = mobius_sieve(static_cast<int>(sqrt_n), primes);
+    vector<uint32_t> sqf_d;
+    sqf_d.reserve(static_cast<size_t>(sqrt_n * 7 / 10));
+    for (uint32_t d = 1; d <= sqrt_n; ++d) {
+        if (mu[static_cast<size_t>(d)] != 0) sqf_d.push_back(d);
+    }
 
     Context ctx;
     ctx.N = N;
     ctx.primes = &primes;
     ctx.mu = &mu;
+    ctx.sqf_d = &sqf_d;
 
     u128 total = 0;
     vector<uint32_t> primes_in_r;
     vector<uint64_t> divs = {1};
     vector<int8_t> signs = {1};
-    uint64_t q_root = count_squarefree_coprime(N, primes_in_r, divs, signs, mu);
+    uint64_t q_root = count_squarefree_coprime(N, primes_in_r, divs, signs, mu, sqf_d);
     total += q_root;
 
     int prime_limit = 0;
@@ -212,6 +243,63 @@ static u128 compute_sum(uint64_t N, bool use_threads) {
         }
     }
     return total;
+}
+
+static vector<uint32_t> generate_primes_upto(uint32_t limit) {
+    vector<uint32_t> primes;
+    vector<uint8_t> is_comp(static_cast<size_t>(limit + 1), 0);
+    for (uint32_t i = 2; i <= limit; ++i) {
+        if (!is_comp[static_cast<size_t>(i)]) {
+            primes.push_back(i);
+            if (static_cast<uint64_t>(i) * i <= limit) {
+                for (uint64_t j = static_cast<uint64_t>(i) * i; j <= limit; j += i) {
+                    is_comp[static_cast<size_t>(j)] = 1;
+                }
+            }
+        }
+    }
+    return primes;
+}
+
+static u128 dfs_alt(int i0, uint64_t L0, const vector<uint32_t>& primes, const vector<uint64_t>& p2) {
+    u128 res = 0;
+    for (int i = i0; i < static_cast<int>(primes.size()); ++i) {
+        const uint64_t q = p2[static_cast<size_t>(i)];
+        uint64_t L = L0 / q;
+        if (L == 0) break;
+
+        const uint64_t p = primes[static_cast<size_t>(i)];
+        uint64_t e = 1;
+        uint64_t g = 1;
+        while (L > 0) {
+            const uint64_t gp = g;
+            ++e;
+            if (e != 1) {
+                if (e == p) {
+                    g *= q;
+                    e = 0;
+                } else {
+                    g *= p;
+                }
+                const uint64_t c = g - gp;
+                res += static_cast<u128>(c) * static_cast<u128>(L);
+                if (L > q) {
+                    res += static_cast<u128>(c) * dfs_alt(i + 1, L, primes, p2);
+                }
+            }
+            L /= p;
+        }
+    }
+    return res;
+}
+
+static u128 compute_sum_alt(uint64_t L) {
+    const uint32_t limit = static_cast<uint32_t>(isqrt_u64(L));
+    const vector<uint32_t> primes = generate_primes_upto(limit);
+    vector<uint64_t> p2;
+    p2.reserve(primes.size());
+    for (uint32_t p : primes) p2.push_back(static_cast<uint64_t>(p) * p);
+    return static_cast<u128>(L) + dfs_alt(0, L, primes, p2);
 }
 
 static vector<int> build_spf(int n) {
@@ -299,6 +387,12 @@ static void validate_small() {
         cerr << "Small-N check failed: expected " << brute << '\n';
         exit(1);
     }
+    u128 alt = compute_sum_alt(static_cast<uint64_t>(n));
+    if (alt != static_cast<u128>(brute)) {
+        cerr << "Small-N alt check failed: expected " << brute
+             << " got " << static_cast<uint64_t>(alt) << '\n';
+        exit(1);
+    }
 }
 
 static string to_string_u128(u128 value) {
@@ -320,7 +414,7 @@ int main() {
     validate_small();
 
     const uint64_t N = 5000000000000000ULL;
-    u128 total = compute_sum(N, true);
+    u128 total = compute_sum_alt(N);
     if (total > 0) total -= 1;  // exclude n=1
     cout << to_string_u128(total) << '\n';
     return 0;

@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <pthread.h>
+#include <unistd.h>
 #include <vector>
 
 using i64 = long long;
@@ -13,14 +15,14 @@ static std::vector<int> distinct_parts(int limit) {
     std::vector<int> q(static_cast<std::size_t>(limit + 1), 0);
     q[0] = 1;
 
-    std::vector<std::int8_t> pent_sign(static_cast<std::size_t>(limit + 1), 0);
+    std::vector<int> pent_sign(static_cast<std::size_t>(limit + 1), 0);
     const int lim = static_cast<int>(std::sqrt(static_cast<double>(limit)));
     for (int j = 0; j <= lim; ++j) {
         const int sign = (j & 1) ? -1 : 1;
         const i64 g1 = static_cast<i64>(j) * (3LL * j + 1) / 2;
         const i64 g2 = static_cast<i64>(j) * (3LL * j - 1) / 2;
-        if (g1 <= limit) pent_sign[static_cast<std::size_t>(g1)] = static_cast<std::int8_t>(sign);
-        if (g2 <= limit) pent_sign[static_cast<std::size_t>(g2)] = static_cast<std::int8_t>(sign);
+        if (g1 <= limit) pent_sign[static_cast<std::size_t>(g1)] = sign;
+        if (g2 <= limit) pent_sign[static_cast<std::size_t>(g2)] = sign;
     }
 
     std::vector<int> squares;
@@ -29,17 +31,20 @@ static std::vector<int> distinct_parts(int limit) {
 
     for (int n = 1; n <= limit; ++n) {
         int val = pent_sign[static_cast<std::size_t>(n)];
-        for (int k = 0; k < static_cast<int>(squares.size()) && squares[static_cast<std::size_t>(k)] <= n; ++k) {
-            int term = q[static_cast<std::size_t>(n - squares[static_cast<std::size_t>(k)])];
-            term <<= 1;
+        int sign = 1;
+        for (int k = 0; k < static_cast<int>(squares.size()); ++k) {
+            const int sq = squares[static_cast<std::size_t>(k)];
+            if (sq > n) break;
+            int term = q[static_cast<std::size_t>(n - sq)] << 1;
             if (term >= MOD) term -= MOD;
-            if ((k & 1) == 0) {
+            if (sign > 0) {
                 val += term;
                 if (val >= MOD) val -= MOD;
             } else {
                 val -= term;
                 if (val < 0) val += MOD;
             }
+            sign = -sign;
         }
         q[static_cast<std::size_t>(n)] = val;
     }
@@ -53,29 +58,31 @@ static std::vector<int> self_conjugate(int limit) {
     q_odd[0] = 1;
     p[0] = 1;
 
+    int* qptr = q_odd.data();
+    int* pptr = p.data();
+
     for (int k = 1; k <= kmax; ++k) {
         const int k_sq = k * k;
         const int rem = limit - k_sq;
-        int idx = k_sq - 2;
-
         const int vmax_small = std::min(k - 1, rem / 2);
-        for (int v = 0; v <= vmax_small; ++v) {
-            idx += 2;
-            const int pos = k_sq + (v << 1);
-            int x = q_odd[static_cast<std::size_t>(pos)] + p[static_cast<std::size_t>(v)];
+        int idx = k_sq;
+        for (int v = 0; v <= vmax_small; ++v, idx += 2) {
+            int x = qptr[idx] + pptr[v];
             if (x >= MOD) x -= MOD;
-            q_odd[static_cast<std::size_t>(pos)] = x;
+            qptr[idx] = x;
         }
 
         const int vmax = rem / 2;
-        for (int v = k; v <= vmax; ++v) {
-            idx += 2;
-            int pv = p[static_cast<std::size_t>(v)] + p[static_cast<std::size_t>(v - k)];
+        int idx2 = k_sq + 2 * k;
+        int* p_cur = pptr + k;
+        int* p_prev = pptr;
+        for (int v = k; v <= vmax; ++v, idx2 += 2, ++p_cur, ++p_prev) {
+            int pv = *p_cur + *p_prev;
             if (pv >= MOD) pv -= MOD;
-            p[static_cast<std::size_t>(v)] = pv;
-            int x = q_odd[static_cast<std::size_t>(idx)] + pv;
+            *p_cur = pv;
+            int x = qptr[idx2] + pv;
             if (x >= MOD) x -= MOD;
-            q_odd[static_cast<std::size_t>(idx)] = x;
+            qptr[idx2] = x;
         }
     }
 
@@ -83,15 +90,31 @@ static std::vector<int> self_conjugate(int limit) {
 }
 
 static int solve614(int limit) {
+    struct Task {
+        int limit;
+        std::vector<int>* out;
+    };
+
+    auto worker = [](void* arg) -> void* {
+        auto* task = static_cast<Task*>(arg);
+        *task->out = distinct_parts(task->limit);
+        return nullptr;
+    };
+
+    std::vector<int> q;
+    Task task{limit / 4, &q};
+    pthread_t thread{};
+    pthread_create(&thread, nullptr, worker, &task);
+
     std::vector<int> q_odd = self_conjugate(limit);
+    pthread_join(thread, nullptr);
+
     std::vector<int> s_odd = q_odd;
     for (int i = 1; i <= limit; ++i) {
         int x = s_odd[static_cast<std::size_t>(i)] + s_odd[static_cast<std::size_t>(i - 1)];
         if (x >= MOD) x -= MOD;
         s_odd[static_cast<std::size_t>(i)] = x;
     }
-
-    std::vector<int> q = distinct_parts(limit / 4);
 
     int res = MOD - 1;
     for (int i = 0; i <= limit; i += 4) {

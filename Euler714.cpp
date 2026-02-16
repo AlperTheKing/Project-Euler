@@ -1,204 +1,63 @@
 #include <algorithm>
 #include <atomic>
-#include <boost/multiprecision/cpp_int.hpp>
 #include <cassert>
 #include <cstdint>
-#include <iostream>
+#include <limits>
+#include <numeric>
+#include <pthread.h>
 #include <string>
-#include <thread>
-#include <utility>
+#include <iostream>
+#include <unistd.h>
 #include <vector>
 
 namespace {
 
-using boost::multiprecision::cpp_int;
+using u128 = unsigned __int128;
 
-class DuodigitSolver {
-  public:
-    DuodigitSolver() {
-        for (int a = 0; a <= 9; ++a) {
-            for (int b = a; b <= 9; ++b) {
-                digit_pairs_.emplace_back(a, b);
-            }
-        }
+u128 gcd_u128(u128 a, u128 b) {
+    while (b != 0) {
+        const u128 r = a % b;
+        a = b;
+        b = r;
     }
+    return a;
+}
 
-    std::string d_of_n(const int n) const {
-        std::vector<int> visited(static_cast<std::size_t>(n), 0);
-        std::vector<int> parent(static_cast<std::size_t>(n), -2);
-        std::vector<int> depth(static_cast<std::size_t>(n), 0);
-        std::vector<unsigned char> parent_digit(static_cast<std::size_t>(n), 0);
-        std::vector<int> queue;
-        queue.reserve(static_cast<std::size_t>(n));
-
-        int token = 0;
-        std::string best;
-        int best_len = 0;
-
-        for (const auto [a, b] : digit_pairs_) {
-            if (a == 0 && b == 0) {
-                continue;
-            }
-
-            int edges[2] = {a, b};
-            int edge_count = (a == b) ? 1 : 2;
-            if (edge_count == 2 && edges[0] > edges[1]) {
-                std::swap(edges[0], edges[1]);
-            }
-
-            int starts[2];
-            int start_count = 0;
-            for (int i = 0; i < edge_count; ++i) {
-                if (edges[i] != 0 && (start_count == 0 || starts[start_count - 1] != edges[i])) {
-                    starts[start_count++] = edges[i];
-                }
-            }
-            if (start_count == 0) {
-                continue;
-            }
-
-            ++token;
-            queue.clear();
-            int head = 0;
-            int found = -1;
-
-            for (int i = 0; i < start_count; ++i) {
-                const int d = starts[i];
-                const int r = d % n;
-                if (visited[static_cast<std::size_t>(r)] == token) {
-                    continue;
-                }
-                visited[static_cast<std::size_t>(r)] = token;
-                parent[static_cast<std::size_t>(r)] = -1;
-                parent_digit[static_cast<std::size_t>(r)] = static_cast<unsigned char>(d);
-                depth[static_cast<std::size_t>(r)] = 1;
-                queue.push_back(r);
-            }
-
-            if (visited[0] == token) {
-                found = 0;
-            }
-
-            while (found == -1 && head < static_cast<int>(queue.size())) {
-                const int r = queue[static_cast<std::size_t>(head++)];
-                const int next_depth = depth[static_cast<std::size_t>(r)] + 1;
-
-                if (best_len > 0 && next_depth > best_len) {
-                    continue;
-                }
-
-                for (int i = 0; i < edge_count; ++i) {
-                    const int d = edges[i];
-                    const int nr = static_cast<int>((static_cast<long long>(r) * 10 + d) % n);
-                    if (visited[static_cast<std::size_t>(nr)] == token) {
-                        continue;
-                    }
-
-                    visited[static_cast<std::size_t>(nr)] = token;
-                    parent[static_cast<std::size_t>(nr)] = r;
-                    parent_digit[static_cast<std::size_t>(nr)] = static_cast<unsigned char>(d);
-                    depth[static_cast<std::size_t>(nr)] = next_depth;
-
-                    if (nr == 0) {
-                        found = 0;
-                        break;
-                    }
-
-                    queue.push_back(nr);
-                }
-            }
-
-            if (found == -1) {
-                continue;
-            }
-
-            std::string candidate(static_cast<std::size_t>(depth[0]), '0');
-            int cur = 0;
-            for (int i = depth[0] - 1; i >= 0; --i) {
-                candidate[static_cast<std::size_t>(i)] =
-                    static_cast<char>('0' + parent_digit[static_cast<std::size_t>(cur)]);
-                cur = parent[static_cast<std::size_t>(cur)];
-                if (cur == -1) {
-                    break;
-                }
-            }
-
-            if (best.empty() || candidate.size() < best.size() ||
-                (candidate.size() == best.size() && candidate < best)) {
-                best = std::move(candidate);
-                best_len = static_cast<int>(best.size());
-            }
-        }
-
-        return best;
+std::int64_t mod_inverse(std::int64_t a, std::int64_t mod) {
+    std::int64_t b = mod;
+    std::int64_t x0 = 1;
+    std::int64_t x1 = 0;
+    while (b != 0) {
+        const std::int64_t q = a / b;
+        const std::int64_t t = a % b;
+        a = b;
+        b = t;
+        const std::int64_t nx = x0 - q * x1;
+        x0 = x1;
+        x1 = nx;
     }
-
-    cpp_int d_of_n_int(const int n) const {
-        const std::string s = d_of_n(n);
-        cpp_int value = 0;
-        for (const char c : s) {
-            value = value * 10 + (c - '0');
-        }
-        return value;
+    if (x0 < 0) {
+        x0 %= mod;
+        x0 += mod;
     }
+    return x0 % mod;
+}
 
-    cpp_int D(const int k) const {
-        if (k <= 0) {
-            return 0;
-        }
-
-        unsigned threads = std::thread::hardware_concurrency();
-        if (threads == 0U) {
-            threads = 4U;
-        }
-        if (threads <= 1U || k < 2000) {
-            cpp_int total = 0;
-            for (int n = 1; n <= k; ++n) {
-                total += d_of_n_int(n);
-            }
-            return total;
-        }
-
-        const unsigned use_threads = std::min<unsigned>(threads, static_cast<unsigned>(k));
-        std::atomic<int> next(1);
-        constexpr int chunk = 32;
-        std::vector<cpp_int> partial(static_cast<std::size_t>(use_threads), 0);
-        std::vector<std::thread> pool;
-        pool.reserve(use_threads);
-
-        for (unsigned t = 0; t < use_threads; ++t) {
-            pool.emplace_back([&, t]() {
-                cpp_int local = 0;
-                while (true) {
-                    const int start = next.fetch_add(chunk, std::memory_order_relaxed);
-                    if (start > k) {
-                        break;
-                    }
-                    const int end = std::min(k, start + chunk - 1);
-                    for (int n = start; n <= end; ++n) {
-                        local += d_of_n_int(n);
-                    }
-                }
-                partial[static_cast<std::size_t>(t)] = local;
-            });
-        }
-        for (auto& th : pool) {
-            th.join();
-        }
-
-        cpp_int total = 0;
-        for (const auto& v : partial) {
-            total += v;
-        }
-        return total;
+std::string to_string_u128(u128 x) {
+    if (x == 0) {
+        return "0";
     }
+    std::string s;
+    while (x > 0) {
+        s.push_back(static_cast<char>('0' + static_cast<int>(x % 10)));
+        x /= 10;
+    }
+    std::reverse(s.begin(), s.end());
+    return s;
+}
 
-  private:
-    std::vector<std::pair<int, int>> digit_pairs_;
-};
-
-std::string scientific_13sig(cpp_int value) {
-    std::string digits = value.convert_to<std::string>();
+std::string scientific_13sig_u128(u128 value) {
+    std::string digits = to_string_u128(value);
     int exponent = static_cast<int>(digits.size()) - 1;
 
     std::string sig;
@@ -229,10 +88,252 @@ std::string scientific_13sig(cpp_int value) {
     return std::string(1, sig[0]) + "." + sig.substr(1) + "e" + std::to_string(exponent);
 }
 
+class Solver {
+  private:
+    struct RangeValue {
+        u128 max_sum = 0;
+        u128 min_sum = 0;
+    };
+
+    struct ResidueSet {
+        explicit ResidueSet(int mod) : index(static_cast<std::size_t>(mod), -1), n(mod) {}
+
+        void insert_or_update(int residue, u128 max_sum, u128 min_sum) {
+            int& slot = index[static_cast<std::size_t>(residue)];
+            if (slot < 0) {
+                slot = static_cast<int>(keys.size());
+                keys.push_back(residue);
+                vals.push_back(RangeValue{max_sum, min_sum});
+                return;
+            }
+            RangeValue& cur = vals[static_cast<std::size_t>(slot)];
+            if (max_sum > cur.max_sum) cur.max_sum = max_sum;
+            if (min_sum < cur.min_sum) cur.min_sum = min_sum;
+        }
+
+        void add_shift(int shift_residue, u128 weight) {
+            const std::vector<int> old_keys = keys;
+            const std::vector<RangeValue> old_vals = vals;
+            for (std::size_t i = 0; i < old_keys.size(); ++i) {
+                int nr = old_keys[i] + shift_residue;
+                if (nr >= n) nr -= n;
+                insert_or_update(nr, old_vals[i].max_sum + weight, old_vals[i].min_sum + weight);
+            }
+        }
+
+        int lookup_index(int residue) const {
+            return index[static_cast<std::size_t>(residue)];
+        }
+
+        std::size_t size() const { return keys.size(); }
+
+        std::vector<int> index;
+        std::vector<int> keys;
+        std::vector<RangeValue> vals;
+        int n;
+    };
+
+    struct GInfo {
+        int g = 0;
+        int gcd_ng = 1;
+        int ng = 1;
+        int inv = 0;
+    };
+
+    struct WorkerArgs {
+        const Solver* solver = nullptr;
+        int k = 0;
+        std::atomic<int>* next = nullptr;
+        int chunk = 0;
+        u128* out = nullptr;
+    };
+
+    static void* worker_entry(void* raw) {
+        auto* args = static_cast<WorkerArgs*>(raw);
+        u128 local = 0;
+        while (true) {
+            const int start = args->next->fetch_add(args->chunk, std::memory_order_relaxed);
+            if (start > args->k) break;
+            const int end = std::min(args->k, start + args->chunk - 1);
+            for (int n = start; n <= end; ++n) {
+                local += args->solver->d_u128(n);
+            }
+        }
+        *args->out = local;
+        return nullptr;
+    }
+
+  public:
+    u128 d_u128(int n, int start = 0) const {
+        std::vector<GInfo> g_infos;
+        g_infos.reserve(18);
+        for (int g = -9; g <= 9; ++g) {
+            if (g == 0) continue;
+            const int g_abs = (g < 0) ? -g : g;
+            const int d = std::gcd(g_abs, n);
+            const int ng = n / d;
+            int g_reduced = g / d;
+            g_reduced %= ng;
+            if (g_reduced < 0) g_reduced += ng;
+            const int inv = static_cast<int>(mod_inverse(g_reduced, ng));
+            g_infos.push_back(GInfo{g, d, ng, inv});
+        }
+
+        ResidueSet xset(n);
+        ResidueSet yset(n);
+        xset.insert_or_update(0, 0, 0);
+        yset.insert_or_update(0, 0, 0);
+
+        u128 hi = 1;
+        u128 tenp = 1;
+        u128 ones = 1;
+        int leading_start = (start > 0) ? start : n;
+        const int rem = n % 10;
+        const int scale = rem ? 100 : 10;
+
+        while (true) {
+            if (static_cast<u128>(n) % (tenp * 10) != 0) {
+                u128 ans = static_cast<u128>(leading_start) * ones;
+                for (int f = leading_start; f <= 9; ++f) {
+                    const int v = static_cast<int>(ans % static_cast<u128>(n));
+                    if (v == 0) {
+                        return ans;
+                    }
+
+                    bool found = false;
+                    u128 best = 0;
+
+                    const int g_begin = rem ? -f : -f;
+                    const int g_end = rem ? (10 - f - 1) : (-f);
+                    for (int g = g_begin; g <= g_end; ++g) {
+                        if (g == 0) {
+                            if (found) break;
+                            continue;
+                        }
+
+                        const GInfo* info = nullptr;
+                        for (const GInfo& gi : g_infos) {
+                            if (gi.g == g) {
+                                info = &gi;
+                                break;
+                            }
+                        }
+                        if (info == nullptr) continue;
+
+                        const int rhs = (v == 0) ? 0 : (n - v);
+                        if (rhs % info->gcd_ng != 0) continue;
+
+                        const int reduced_rhs = rhs / info->gcd_ng;
+                        const int w0 =
+                            static_cast<int>((static_cast<long long>(reduced_rhs) * info->inv) %
+                                             info->ng);
+
+                        for (int w = w0; w < n; w += info->ng) {
+                            for (std::size_t xi = 0; xi < xset.keys.size(); ++xi) {
+                                const int x = xset.keys[xi];
+                                int y = w - x;
+                                if (y < 0) y += n;
+                                const int yi = yset.lookup_index(y);
+                                if (yi < 0) continue;
+
+                                const u128 sx = (g > 0) ? xset.vals[xi].min_sum : xset.vals[xi].max_sum;
+                                const u128 sy = (g > 0)
+                                                    ? yset.vals[static_cast<std::size_t>(yi)].min_sum
+                                                    : yset.vals[static_cast<std::size_t>(yi)].max_sum;
+                                const u128 s = sx + sy;
+                                u128 cand = 0;
+                                if (g > 0) {
+                                    cand = ans + static_cast<u128>(g) * s;
+                                } else {
+                                    const u128 dec = static_cast<u128>(-g) * s;
+                                    if (dec > ans) continue;
+                                    cand = ans - dec;
+                                }
+                                if (!found || cand < best) {
+                                    found = true;
+                                    best = cand;
+                                }
+                            }
+                        }
+                    }
+
+                    if (found) {
+                        return best;
+                    }
+                    ans += ones;
+                }
+
+                ResidueSet& target =
+                    (yset.size() < static_cast<std::size_t>(scale) * xset.size()) ? yset : xset;
+                target.add_shift(static_cast<int>(hi % static_cast<u128>(n)), tenp);
+            } else {
+                ones = 0;
+            }
+
+            leading_start = leading_start / 10;
+            if (leading_start == 0) leading_start = 1;
+            hi = (hi * 10) % static_cast<u128>(n);
+            tenp *= 10;
+            ones += tenp;
+        }
+    }
+
+    std::string d_of_n(int n) const { return to_string_u128(d_u128(n)); }
+
+    u128 D(int k) const {
+        if (k <= 0) return 0;
+
+        long hw = sysconf(_SC_NPROCESSORS_ONLN);
+        if (hw < 1) hw = 4;
+        unsigned thread_count = static_cast<unsigned>(hw);
+        if (thread_count > static_cast<unsigned>(k)) thread_count = static_cast<unsigned>(k);
+        if (thread_count < 1U) thread_count = 1U;
+
+        if (thread_count == 1U || k < 2000) {
+            u128 total = 0;
+            for (int n = 1; n <= k; ++n) total += d_u128(n);
+            return total;
+        }
+
+        std::atomic<int> next(1);
+        constexpr int chunk = 64;
+
+        std::vector<pthread_t> tids(static_cast<std::size_t>(thread_count));
+        std::vector<WorkerArgs> args(static_cast<std::size_t>(thread_count));
+        std::vector<u128> partial(static_cast<std::size_t>(thread_count), 0);
+
+        bool create_failed = false;
+        unsigned started = 0;
+        for (unsigned t = 0; t < thread_count; ++t) {
+            args[static_cast<std::size_t>(t)] =
+                WorkerArgs{this, k, &next, chunk, &partial[static_cast<std::size_t>(t)]};
+            if (pthread_create(&tids[static_cast<std::size_t>(t)], nullptr, worker_entry,
+                               &args[static_cast<std::size_t>(t)]) != 0) {
+                create_failed = true;
+                break;
+            }
+            ++started;
+        }
+        for (unsigned t = 0; t < started; ++t) {
+            pthread_join(tids[static_cast<std::size_t>(t)], nullptr);
+        }
+
+        if (create_failed) {
+            u128 total = 0;
+            for (int n = 1; n <= k; ++n) total += d_u128(n);
+            return total;
+        }
+
+        u128 total = 0;
+        for (u128 v : partial) total += v;
+        return total;
+    }
+};
+
 }  // namespace
 
 int main() {
-    const DuodigitSolver solver;
+    const Solver solver;
 
     assert(solver.d_of_n(12) == "12");
     assert(solver.d_of_n(102) == "1122");
@@ -240,11 +341,11 @@ int main() {
     assert(solver.d_of_n(290) == "11011010");
     assert(solver.d_of_n(317) == "211122");
 
-    assert(solver.D(110) == cpp_int("11047"));
-    assert(solver.D(150) == cpp_int("53312"));
-    assert(solver.D(500) == cpp_int("29570988"));
+    assert(solver.D(110) == 11047);
+    assert(solver.D(150) == 53312);
+    assert(solver.D(500) == 29570988);
 
-    const cpp_int answer = solver.D(50'000);
-    std::cout << scientific_13sig(answer) << '\n';
+    const u128 answer = solver.D(50'000);
+    std::cout << scientific_13sig_u128(answer) << '\n';
     return 0;
 }

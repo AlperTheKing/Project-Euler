@@ -2,25 +2,11 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <pthread.h>
+#include <unistd.h>
 #include <vector>
 
 #include <boost/multiprecision/cpp_int.hpp>
-
-// Project Euler 599: Distinct Colourings of a Rubik's Cube
-//
-// A 2x2x2 cube has 8 corner cubies, each with 3 stickers, for 24 stickers total.
-// We colour each sticker with one of n colours (unlimited supply).
-// Two colourings are equivalent if one can be transformed into the other by legal cube moves.
-//
-// By Burnside's lemma, the number of essentially distinct colourings is:
-//   (1/|G|) * sum_{g in G} n^{c(g)}
-// where c(g) is the number of cycles in the permutation of the 24 stickers induced by g.
-//
-// The move group on corners consists of all corner permutations (8!) and orientations (3^7,
-// last orientation determined by the twist-sum constraint), so |G| = 8! * 3^7.
-//
-// We enumerate all group elements in corner representation and compute the cycle-count
-// histogram for the induced 24-sticker permutation.
 
 using boost::multiprecision::cpp_int;
 using u64 = std::uint64_t;
@@ -40,8 +26,7 @@ static int cycles_in_perm(const std::array<std::uint8_t, 24>& p) {
     return cycles;
 }
 
-static std::array<u64, 25> cycle_histogram() {
-    // Precompute all orientation vectors (3^7) with sum == 0 (mod 3).
+static std::vector<std::array<std::uint8_t, 8>> build_orientations() {
     std::vector<std::array<std::uint8_t, 8>> oris;
     oris.reserve(2187);
     for (int mask = 0; mask < 2187; ++mask) {
@@ -57,35 +42,123 @@ static std::array<u64, 25> cycle_histogram() {
         ori[7] = (std::uint8_t)((3 - (sum % 3)) % 3);
         oris.push_back(ori);
     }
+    return oris;
+}
 
-    std::array<u64, 25> freq{};
-    freq.fill(0);
-
+static std::vector<std::array<std::uint8_t, 8>> build_permutations() {
+    std::vector<std::array<std::uint8_t, 8>> perms;
+    perms.reserve(40320);
     std::array<std::uint8_t, 8> perm{};
     for (int i = 0; i < 8; ++i) perm[(size_t)i] = (std::uint8_t)i;
-
     do {
-        for (const auto& ori : oris) {
+        perms.push_back(perm);
+    } while (std::next_permutation(perm.begin(), perm.end()));
+    return perms;
+}
+
+struct HistWorkerCtx {
+    const std::vector<std::array<std::uint8_t, 8>>* perms;
+    const std::vector<std::array<std::uint8_t, 8>>* oris;
+    std::size_t begin_idx;
+    std::size_t end_idx;
+    std::array<u64, 25> local_freq;
+};
+
+static void* hist_worker_main(void* ptr) {
+    auto* ctx = static_cast<HistWorkerCtx*>(ptr);
+    ctx->local_freq.fill(0);
+
+    for (std::size_t pi = ctx->begin_idx; pi < ctx->end_idx; ++pi) {
+        const auto& perm = (*ctx->perms)[pi];
+        for (const auto& ori : *ctx->oris) {
             std::array<std::uint8_t, 24> p{};
             for (int pos = 0; pos < 8; ++pos) {
                 const int c = perm[(size_t)pos];
                 const int o = ori[(size_t)pos];
                 for (int j = 0; j < 3; ++j) {
-                    // Slot j at position pos receives cubie facelet k.
                     const int k = (j - o + 3) % 3;
                     p[(size_t)(3 * c + k)] = (std::uint8_t)(3 * pos + j);
                 }
             }
             const int cyc = cycles_in_perm(p);
-            ++freq[(size_t)cyc];
+            ++ctx->local_freq[(size_t)cyc];
         }
-    } while (std::next_permutation(perm.begin(), perm.end()));
+    }
+
+    return nullptr;
+}
+
+static unsigned choose_thread_count(std::size_t tasks) {
+    long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    unsigned threads = (cpu_count > 0) ? static_cast<unsigned>(cpu_count) : 1U;
+    if (threads > 8U) {
+        threads = 8U;
+    }
+    if (threads > tasks) {
+        threads = static_cast<unsigned>(tasks);
+    }
+    if (threads == 0U) {
+        threads = 1U;
+    }
+    return threads;
+}
+
+static std::array<u64, 25> cycle_histogram() {
+    const auto oris = build_orientations();
+    const auto perms = build_permutations();
+
+    std::array<u64, 25> freq{};
+    freq.fill(0);
+
+    const unsigned thread_count = choose_thread_count(perms.size());
+    if (thread_count == 1U) {
+        HistWorkerCtx ctx{&perms, &oris, 0U, perms.size(), {}};
+        hist_worker_main(&ctx);
+        return ctx.local_freq;
+    }
+
+    std::vector<pthread_t> threads(thread_count);
+    std::vector<HistWorkerCtx> ctx(thread_count);
+    const std::size_t block = (perms.size() + thread_count - 1U) / thread_count;
+
+    unsigned created = 0U;
+    bool failed = false;
+    for (unsigned t = 0; t < thread_count; ++t) {
+        const std::size_t begin = static_cast<std::size_t>(t) * block;
+        const std::size_t end = std::min(begin + block, perms.size());
+        if (begin >= end) {
+            ctx[t] = HistWorkerCtx{&perms, &oris, 0U, 0U, {}};
+            continue;
+        }
+        ctx[t] = HistWorkerCtx{&perms, &oris, begin, end, {}};
+        if (pthread_create(&threads[t], nullptr, hist_worker_main, &ctx[t]) != 0) {
+            failed = true;
+            break;
+        }
+        ++created;
+    }
+
+    for (unsigned t = 0; t < created; ++t) {
+        pthread_join(threads[t], nullptr);
+    }
+
+    if (failed) {
+        HistWorkerCtx seq{&perms, &oris, 0U, perms.size(), {}};
+        hist_worker_main(&seq);
+        return seq.local_freq;
+    }
+
+    for (unsigned t = 0; t < thread_count; ++t) {
+        for (int k = 0; k <= 24; ++k) {
+            freq[(size_t)k] += ctx[t].local_freq[(size_t)k];
+        }
+    }
 
     return freq;
 }
 
 static cpp_int orbits_from_hist(const std::array<u64, 25>& freq, int colours) {
-    const u64 G = 88179840ULL; // 8! * 3^7
+    const u64 G = 88179840ULL;
 
     cpp_int sum = 0;
     cpp_int pw = 1;
@@ -98,8 +171,6 @@ static cpp_int orbits_from_hist(const std::array<u64, 25>& freq, int colours) {
 
 int main() {
     const auto freq = cycle_histogram();
-
-    // Validation from the statement.
     if (orbits_from_hist(freq, 2) != 183) {
         std::cerr << "Validation failed for n=2\n";
         return 1;

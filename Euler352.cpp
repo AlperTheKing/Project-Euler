@@ -2,7 +2,9 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <pthread.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -66,10 +68,69 @@ long double T(const int s, const long double p) {
 }
 
 long double solve() {
+    struct WorkerCtx {
+        int start_i;
+        int step_i;
+        long double partial_sum;
+    };
+
+    auto worker_main = [](void* ptr) -> void* {
+        auto* ctx = static_cast<WorkerCtx*>(ptr);
+        long double local = 0.0L;
+        for (int i = ctx->start_i; i <= 50; i += ctx->step_i) {
+            const long double p = static_cast<long double>(i) / 100.0L;
+            local += T(10000, p);
+        }
+        ctx->partial_sum = local;
+        return nullptr;
+    };
+
+    long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    unsigned thread_count = (cpu_count > 0) ? static_cast<unsigned>(cpu_count) : 1U;
+    if (thread_count > 8U) {
+        thread_count = 8U;
+    }
+    if (thread_count > 50U) {
+        thread_count = 50U;
+    }
+    if (thread_count <= 1U) {
+        long double total = 0.0L;
+        for (int i = 1; i <= 50; ++i) {
+            const long double p = static_cast<long double>(i) / 100.0L;
+            total += T(10000, p);
+        }
+        return total;
+    }
+
+    std::vector<pthread_t> threads(thread_count);
+    std::vector<WorkerCtx> ctx(thread_count);
+    unsigned created = 0U;
+    bool failed = false;
+    for (unsigned t = 0; t < thread_count; ++t) {
+        ctx[t] = WorkerCtx{static_cast<int>(t) + 1, static_cast<int>(thread_count), 0.0L};
+        if (pthread_create(&threads[t], nullptr, worker_main, &ctx[t]) != 0) {
+            failed = true;
+            break;
+        }
+        ++created;
+    }
+
+    for (unsigned t = 0; t < created; ++t) {
+        pthread_join(threads[t], nullptr);
+    }
+
+    if (failed) {
+        long double total = 0.0L;
+        for (int i = 1; i <= 50; ++i) {
+            const long double p = static_cast<long double>(i) / 100.0L;
+            total += T(10000, p);
+        }
+        return total;
+    }
+
     long double total = 0.0L;
-    for (int i = 1; i <= 50; ++i) {
-        const long double p = static_cast<long double>(i) / 100.0L;
-        total += T(10000, p);
+    for (const WorkerCtx& w : ctx) {
+        total += w.partial_sum;
     }
     return total;
 }

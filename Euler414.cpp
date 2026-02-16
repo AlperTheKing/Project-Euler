@@ -2,7 +2,9 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <pthread.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -158,6 +160,74 @@ u64 solve_sum(int k_from, int k_to) {
     return ans;
 }
 
+struct SumWorkerArgs {
+    int tid = 0;
+    int thread_count = 1;
+    int k_from = 2;
+    int k_to = 300;
+    u64 partial = 0ULL;
+};
+
+void* solve_sum_worker(void* raw) {
+    auto* args = static_cast<SumWorkerArgs*>(raw);
+    u64 local = 0ULL;
+    for (int k = args->k_from + args->tid; k <= args->k_to; k += args->thread_count) {
+        const int b = 6 * k + 3;
+        local = (local + S_of_base(b)) % MOD;
+    }
+    args->partial = local;
+    return nullptr;
+}
+
+u64 solve_sum_parallel(int k_from, int k_to) {
+    const int total_k = k_to - k_from + 1;
+    if (total_k <= 1) {
+        return solve_sum(k_from, k_to);
+    }
+
+    long hw = sysconf(_SC_NPROCESSORS_ONLN);
+    if (hw <= 1) {
+        return solve_sum(k_from, k_to);
+    }
+
+    const int thread_count = std::min<int>(total_k, static_cast<int>(hw));
+    std::vector<pthread_t> threads(static_cast<std::size_t>(thread_count));
+    std::vector<SumWorkerArgs> args(static_cast<std::size_t>(thread_count));
+
+    for (int t = 0; t < thread_count; ++t) {
+        args[static_cast<std::size_t>(t)].tid = t;
+        args[static_cast<std::size_t>(t)].thread_count = thread_count;
+        args[static_cast<std::size_t>(t)].k_from = k_from;
+        args[static_cast<std::size_t>(t)].k_to = k_to;
+        args[static_cast<std::size_t>(t)].partial = 0ULL;
+    }
+
+    bool create_failed = false;
+    int started = 0;
+    for (int t = 0; t < thread_count; ++t) {
+        if (pthread_create(&threads[static_cast<std::size_t>(t)], nullptr,
+                           solve_sum_worker, &args[static_cast<std::size_t>(t)]) != 0) {
+            create_failed = true;
+            break;
+        }
+        ++started;
+    }
+
+    for (int t = 0; t < started; ++t) {
+        pthread_join(threads[static_cast<std::size_t>(t)], nullptr);
+    }
+
+    if (create_failed) {
+        return solve_sum(k_from, k_to);
+    }
+
+    u64 ans = 0ULL;
+    for (const auto& a : args) {
+        ans = (ans + a.partial) % MOD;
+    }
+    return ans;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -169,7 +239,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    const u64 answer = solve_sum(options.k_from, options.k_to);
+    const u64 answer = solve_sum_parallel(options.k_from, options.k_to);
     std::cout << answer << '\n';
     return 0;
 }

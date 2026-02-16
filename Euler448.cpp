@@ -20,6 +20,10 @@ inline int64 mod_norm(int64 x) {
     return x;
 }
 
+inline int64 mod_mul_norm(int64 a, int64 b) {
+    return static_cast<int64>((static_cast<uint64_t>(a) * static_cast<uint64_t>(b)) % MOD);
+}
+
 inline int64 mod_add(int64 a, int64 b) {
     a += b;
     if (a >= MOD) a -= MOD;
@@ -34,7 +38,7 @@ inline int64 mod_sub(int64 a, int64 b) {
 }
 
 inline int64 mod_mul(int64 a, int64 b) {
-    return static_cast<int64>((static_cast<__int128>(mod_norm(a)) * mod_norm(b)) % MOD);
+    return mod_mul_norm(mod_norm(a), mod_norm(b));
 }
 
 int64 egcd(int64 a, int64 b, int64& x, int64& y) {
@@ -64,7 +68,7 @@ int64 sum_arith(int64 l, int64 r) {
     if (l > r) return 0;
     int64 cnt = (r - l + 1) % MOD;
     int64 s = mod_norm(l + r);
-    return mod_mul(mod_mul(s, cnt), INV2);
+    return mod_mul_norm(mod_mul_norm(s, cnt), INV2);
 }
 
 int64 sum_sq(int64 n) {
@@ -72,7 +76,7 @@ int64 sum_sq(int64 n) {
     int64 a = n;
     int64 b = mod_norm(n + 1);
     int64 c = mod_norm(2 * n + 1);
-    return mod_mul(mod_mul(mod_mul(a, b), c), INV6);
+    return mod_mul_norm(mod_mul_norm(mod_mul_norm(a, b), c), INV6);
 }
 
 struct Solver {
@@ -136,10 +140,15 @@ struct Solver {
         }
 
         for (int i = 1; i <= LIM; ++i) {
-            int64 addH = mod_mul(static_cast<int64>(mu[i]), static_cast<int64>(i));
+            int64 addH = 0;
+            if (mu[i] == 1) {
+                addH = i;
+            } else if (mu[i] == -1) {
+                addH = MOD - i;
+            }
             prefH[i] = static_cast<int32_t>(mod_add(prefH[i - 1], addH));
 
-            int64 addG = mod_mul(static_cast<int64>(i), static_cast<int64>(phi[i]));
+            int64 addG = (static_cast<int64>(i) * static_cast<int64>(phi[i])) % MOD;
             prefG[i] = static_cast<int32_t>(mod_add(prefG[i - 1], addG));
         }
     }
@@ -156,7 +165,7 @@ struct Solver {
             int64 v = n / l;
             int64 r = n / v;
             int64 coef = sum_arith(l, r);
-            res = mod_sub(res, mod_mul(coef, H(v)));
+            res = mod_sub(res, mod_mul_norm(coef, H(v)));
             l = r + 1;
         }
 
@@ -177,7 +186,7 @@ struct Solver {
             int64 v = n / l;
             int64 r = n / v;
             int64 mu_seg = mod_sub(H(r), H(l - 1));
-            res = mod_add(res, mod_mul(mu_seg, sum_sq(v)));
+            res = mod_add(res, mod_mul_norm(mu_seg, sum_sq(v)));
             l = r + 1;
         }
 
@@ -193,7 +202,7 @@ struct Solver {
             int64 v = n / l;
             int64 r = n / v;
             int64 seg = mod_sub(G(r), G(l - 1));
-            res = mod_add(res, mod_mul(mod_norm(v), seg));
+            res = mod_add(res, mod_mul_norm(v % MOD, seg));
             l = r + 1;
         }
         return res;

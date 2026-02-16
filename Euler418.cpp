@@ -330,22 +330,24 @@ struct Solver {
 
     void phase_b_search() {
         const u64 a_high = cube_root_floor();
-        const u64 a_low = lower_a_bound(a_high);
-        const long double log_low = std::log(static_cast<long double>(a_low));
+        const u64 base_a_low = lower_a_bound(a_high);
+        const long double base_log_low = std::log(static_cast<long double>(base_a_low));
         const long double log_high = std::log(static_cast<long double>(a_high));
 
         std::array<std::uint8_t, MAXP> a_exp{};
         a_exp.fill(0U);
 
         auto dfs = [&](auto&& self, const int idx, const u64 cur, const long double lv) -> void {
+            const long double dynamic_log_low =
+                std::max(base_log_low, (log_n - 2.0L * best_log_range) / 3.0L);
             if (idx == pcount) {
-                if (cur >= a_low && cur <= a_high) {
+                if (lv + 1e-18L >= dynamic_log_low && cur <= a_high) {
                     evaluate_candidate(cur, a_exp);
                 }
                 return;
             }
             if (lv > log_high + 1e-18L) return;
-            if (lv + rem_log[static_cast<std::size_t>(idx)] < log_low - 1e-18L) return;
+            if (lv + rem_log[static_cast<std::size_t>(idx)] < dynamic_log_low - 1e-18L) return;
 
             const u64 p = primes[idx];
             const int e = exps[idx];

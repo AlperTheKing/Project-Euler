@@ -3,6 +3,7 @@
 #include <functional>
 #include <iostream>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -61,8 +62,8 @@ bool parse_arguments(int argc, char** argv, Options& options) {
 
 u64 add_mod(const u64 a, const u64 b, const u64 mod) {
     const u64 c = a + b;
-    if (c >= mod || c < a) {
-        return static_cast<u64>(static_cast<u128>(c) % mod);
+    if (c >= mod) {
+        return c - mod;
     }
     return c;
 }
@@ -135,6 +136,105 @@ int valuation(int x, const int p) {
         ++c;
     }
     return c;
+}
+
+struct CycleLayout {
+    std::vector<int> order;
+    std::vector<int> offsets;
+};
+
+CycleLayout build_cycle_layout(
+    const int residue,
+    const std::vector<int>& units,
+    const std::vector<int>& index,
+    const int reduced_mod
+) {
+    const int U = static_cast<int>(units.size());
+    CycleLayout layout;
+    layout.order.reserve(static_cast<std::size_t>(U));
+    layout.offsets.reserve(static_cast<std::size_t>(U) + 1ULL);
+
+    std::vector<unsigned char> seen(static_cast<std::size_t>(U), 0U);
+    for (int start = 0; start < U; ++start) {
+        if (seen[static_cast<std::size_t>(start)] != 0U) {
+            continue;
+        }
+        layout.offsets.push_back(static_cast<int>(layout.order.size()));
+        int cur = start;
+        while (seen[static_cast<std::size_t>(cur)] == 0U) {
+            seen[static_cast<std::size_t>(cur)] = 1U;
+            layout.order.push_back(cur);
+            const int next_residue = static_cast<int>(
+                (static_cast<std::int64_t>(units[static_cast<std::size_t>(cur)]) * residue) % reduced_mod
+            );
+            cur = index[static_cast<std::size_t>(next_residue)];
+        }
+    }
+    layout.offsets.push_back(static_cast<int>(layout.order.size()));
+    return layout;
+}
+
+void apply_transition(
+    const CycleLayout& layout,
+    const u64 exponent,
+    const std::vector<u64>& dp,
+    std::vector<u64>& next,
+    const u64 mod_ans
+) {
+    const u64 total_terms = exponent + 1ULL;
+    const int cycle_count = static_cast<int>(layout.offsets.size()) - 1;
+
+    for (int c = 0; c < cycle_count; ++c) {
+        const int begin = layout.offsets[static_cast<std::size_t>(c)];
+        const int end = layout.offsets[static_cast<std::size_t>(c + 1)];
+        const int L = end - begin;
+
+        u64 cycle_sum = 0ULL;
+        for (int i = begin; i < end; ++i) {
+            const int idx = layout.order[static_cast<std::size_t>(i)];
+            cycle_sum = add_mod(cycle_sum, dp[static_cast<std::size_t>(idx)], mod_ans);
+        }
+
+        const u64 full = total_terms / static_cast<u64>(L);
+        const int rem = static_cast<int>(total_terms % static_cast<u64>(L));
+        const u64 base = mul_mod(cycle_sum, full % mod_ans, mod_ans);
+
+        if (rem == 0) {
+            for (int i = begin; i < end; ++i) {
+                const int idx = layout.order[static_cast<std::size_t>(i)];
+                next[static_cast<std::size_t>(idx)] = base;
+            }
+            continue;
+        }
+
+        u64 win = 0ULL;
+        for (int t = 0; t < rem; ++t) {
+            int pos = L - t;
+            if (pos == L) {
+                pos = 0;
+            }
+            const int idx = layout.order[static_cast<std::size_t>(begin + pos)];
+            win = add_mod(win, dp[static_cast<std::size_t>(idx)], mod_ans);
+        }
+
+        for (int j = 0; j < L; ++j) {
+            const int idx = layout.order[static_cast<std::size_t>(begin + j)];
+            next[static_cast<std::size_t>(idx)] = add_mod(base, win, mod_ans);
+            if (j + 1 == L) {
+                continue;
+            }
+
+            const int add_pos = j + 1;
+            int rem_pos = add_pos - rem;
+            while (rem_pos < 0) {
+                rem_pos += L;
+            }
+            const int add_idx = layout.order[static_cast<std::size_t>(begin + add_pos)];
+            const int rem_idx = layout.order[static_cast<std::size_t>(begin + rem_pos)];
+            win = add_mod(win, dp[static_cast<std::size_t>(add_idx)], mod_ans);
+            win = sub_mod(win, dp[static_cast<std::size_t>(rem_idx)], mod_ans);
+        }
+    }
 }
 
 u64 brute_small_factorial_case() {
@@ -216,67 +316,29 @@ u64 solve_unit_case(const int n, const int d, const u64 mod_ans) {
     dp[static_cast<std::size_t>(index[1])] = 1ULL;
 
     std::vector<u64> next(static_cast<std::size_t>(U), 0ULL);
-    std::vector<char> visited(static_cast<std::size_t>(U), 0);
-    std::vector<int> cycle;
-    cycle.reserve(static_cast<std::size_t>(U));
-
+    std::vector<int> filtered_primes;
+    filtered_primes.reserve(primes.size());
+    std::vector<u64> exponents;
+    exponents.reserve(primes.size());
     for (const int p : primes) {
         if (p == 2 || p == 5) {
             continue;
         }
-        const u64 e = exponent_in_factorial(n, p);
+        filtered_primes.push_back(p);
+        exponents.push_back(exponent_in_factorial(n, p));
+    }
+
+    std::vector<std::optional<CycleLayout>> layouts(static_cast<std::size_t>(reduced_mod));
+
+    for (std::size_t i = 0; i < filtered_primes.size(); ++i) {
+        const int p = filtered_primes[i];
+        const u64 e = exponents[i];
         const int r = p % reduced_mod;
-
-        std::fill(next.begin(), next.end(), 0ULL);
-        std::fill(visited.begin(), visited.end(), 0);
-
-        for (int start = 0; start < U; ++start) {
-            if (visited[static_cast<std::size_t>(start)] != 0) {
-                continue;
-            }
-            cycle.clear();
-            int cur = start;
-            while (visited[static_cast<std::size_t>(cur)] == 0) {
-                visited[static_cast<std::size_t>(cur)] = 1;
-                cycle.push_back(cur);
-                const int next_residue =
-                    static_cast<int>((static_cast<int64_t>(units[static_cast<std::size_t>(cur)]) * r) %
-                                     reduced_mod);
-                cur = index[static_cast<std::size_t>(next_residue)];
-            }
-
-            const int L = static_cast<int>(cycle.size());
-            u64 cycle_sum = 0ULL;
-            for (const int idx : cycle) {
-                cycle_sum = add_mod(cycle_sum, dp[static_cast<std::size_t>(idx)], mod_ans);
-            }
-
-            const u64 total_terms = e + 1ULL;
-            const u64 full = total_terms / static_cast<u64>(L);
-            const int rem = static_cast<int>(total_terms % static_cast<u64>(L));
-
-            std::vector<u64> pref(static_cast<std::size_t>(2 * L + 1), 0ULL);
-            for (int i = 0; i < 2 * L; ++i) {
-                const u64 v = dp[static_cast<std::size_t>(cycle[static_cast<std::size_t>(i % L)])];
-                pref[static_cast<std::size_t>(i + 1)] =
-                    add_mod(pref[static_cast<std::size_t>(i)], v, mod_ans);
-            }
-
-            const u64 base = mul_mod(cycle_sum, full % mod_ans, mod_ans);
-
-            for (int j = 0; j < L; ++j) {
-                u64 value = base;
-                if (rem > 0) {
-                    const int end = j + L + 1;
-                    const int begin = end - rem;
-                    const u64 win =
-                        sub_mod(pref[static_cast<std::size_t>(end)],
-                                pref[static_cast<std::size_t>(begin)], mod_ans);
-                    value = add_mod(value, win, mod_ans);
-                }
-                next[static_cast<std::size_t>(cycle[static_cast<std::size_t>(j)])] = value;
-            }
+        auto& layout = layouts[static_cast<std::size_t>(r)];
+        if (!layout.has_value()) {
+            layout = build_cycle_layout(r, units, index, reduced_mod);
         }
+        apply_transition(*layout, e, dp, next, mod_ans);
         dp.swap(next);
     }
 

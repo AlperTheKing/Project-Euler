@@ -1,15 +1,13 @@
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace {
 
 using u64 = std::uint64_t;
-using i64 = std::int64_t;
+using u128 = unsigned __int128;
 
 struct Options {
     u64 n = 1'000'000'000'000ULL;
@@ -17,18 +15,12 @@ struct Options {
 };
 
 bool parse_u64_after_prefix(const std::string& arg, const std::string& prefix, u64& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
-    }
+    if (arg.rfind(prefix, 0U) != 0U) return false;
     const std::string tail = arg.substr(prefix.size());
-    if (tail.empty()) {
-        return false;
-    }
+    if (tail.empty()) return false;
     u64 parsed = 0ULL;
     for (char ch : tail) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
+        if (ch < '0' || ch > '9') return false;
         parsed = parsed * 10ULL + static_cast<u64>(ch - '0');
     }
     value = parsed;
@@ -42,231 +34,160 @@ bool parse_arguments(int argc, char** argv, Options& options) {
             options.run_checkpoints = false;
             continue;
         }
-        if (parse_u64_after_prefix(arg, "--n=", options.n)) {
-            continue;
-        }
+        if (parse_u64_after_prefix(arg, "--n=", options.n)) continue;
         std::cerr << "Unknown argument: " << arg << '\n';
         return false;
     }
     return options.n >= 1ULL;
 }
 
-u64 isqrt_u64(const u64 n) {
+u64 isqrt_u64(u64 n) {
     u64 x = static_cast<u64>(std::sqrt(static_cast<long double>(n)));
-    while ((x + 1ULL) <= n / (x + 1ULL)) {
-        ++x;
-    }
-    while (x > 0ULL && x > n / x) {
-        --x;
-    }
+    while ((x + 1ULL) <= n / (x + 1ULL)) ++x;
+    while (x > 0ULL && x > n / x) --x;
     return x;
 }
 
-u64 icbrt_u64(const u64 n) {
+u64 icbrt_u64(u64 n) {
     u64 x = static_cast<u64>(std::cbrt(static_cast<long double>(n)));
-    while ((x + 1ULL) <= n / ((x + 1ULL) * (x + 1ULL))) {
-        ++x;
-    }
-    while (x > 0ULL && x > n / (x * x)) {
-        --x;
-    }
+    while ((x + 1ULL) <= n / ((x + 1ULL) * (x + 1ULL))) ++x;
+    while (x > 0ULL && x > n / (x * x)) --x;
     return x;
 }
 
-u64 iroot4_u64(const u64 n) {
-    u64 x = static_cast<u64>(std::sqrt(static_cast<long double>(std::sqrt(static_cast<long double>(n)))));
-    auto pow4 = [](u64 y) -> __uint128_t {
-        return static_cast<__uint128_t>(y) * y * y * y;
-    };
-    while (pow4(x + 1ULL) <= n) {
-        ++x;
+bool pow_leq(u64 base, int exp, u64 limit) {
+    u128 v = 1;
+    for (int i = 0; i < exp; ++i) {
+        v *= base;
+        if (v > static_cast<u128>(limit)) return false;
     }
-    while (x > 0ULL && pow4(x) > n) {
-        --x;
-    }
-    return x;
+    return true;
 }
 
-class PrimeCounting {
-public:
-    PrimeCounting() {
-        constexpr int MAX = 5'000'000;
-        sieve_limit_ = MAX;
-        std::vector<bool> is_comp(static_cast<std::size_t>(MAX + 1), false);
-        pi_small_.assign(static_cast<std::size_t>(MAX + 1), 0);
-        for (int i = 2; i <= MAX; ++i) {
-            if (!is_comp[static_cast<std::size_t>(i)]) {
-                primes_.push_back(i);
-                if (i <= MAX / i) {
-                    for (int j = i * i; j <= MAX; j += i) {
-                        is_comp[static_cast<std::size_t>(j)] = true;
-                    }
-                }
-            }
-            pi_small_[static_cast<std::size_t>(i)] = pi_small_[static_cast<std::size_t>(i - 1)] +
-                                                     (!is_comp[static_cast<std::size_t>(i)] ? 1 : 0);
-        }
-        for (int i = 0; i < 7; ++i) {
-            primes_for_phi_.push_back(primes_[static_cast<std::size_t>(i)]);
-        }
+u64 iroot7_u64(u64 n) {
+    long double x = static_cast<long double>(n);
+    u64 r = static_cast<u64>(std::pow(x, 1.0L / 7.0L));
+    while (pow_leq(r + 1ULL, 7, n)) ++r;
+    while (r > 0ULL && !pow_leq(r, 7, n)) --r;
+    return r;
+}
+
+std::vector<int> prime_sieve(u64 n) {
+    if (n < 2ULL) return {};
+    const std::size_t m = static_cast<std::size_t>(n + 1ULL);
+    std::vector<unsigned char> is_prime(m, 1);
+    is_prime[0] = 0;
+    is_prime[1] = 0;
+    const u64 r = isqrt_u64(n);
+    for (u64 p = 2; p <= r; ++p) {
+        if (!is_prime[static_cast<std::size_t>(p)]) continue;
+        for (u64 q = p * p; q <= n; q += p) is_prime[static_cast<std::size_t>(q)] = 0;
     }
-
-    u64 pi(const u64 n) {
-        if (n <= static_cast<u64>(sieve_limit_)) {
-            return pi_small_[static_cast<std::size_t>(n)];
-        }
-        auto it = pi_cache_.find(n);
-        if (it != pi_cache_.end()) {
-            return it->second;
-        }
-
-        const u64 a = pi(iroot4_u64(n));
-        const u64 b = pi(isqrt_u64(n));
-        const u64 c = pi(icbrt_u64(n));
-
-        i64 sum = static_cast<i64>(phi(n, static_cast<int>(a))) +
-                  static_cast<i64>((b + a - 2ULL) * (b - a + 1ULL) / 2ULL);
-
-        for (u64 i = a + 1ULL; i <= b; ++i) {
-            const u64 w = n / static_cast<u64>(primes_[static_cast<std::size_t>(i - 1ULL)]);
-            sum -= static_cast<i64>(pi(w));
-            if (i <= c) {
-                const u64 lim = pi(isqrt_u64(w));
-                for (u64 j = i; j <= lim; ++j) {
-                    const u64 pj = static_cast<u64>(primes_[static_cast<std::size_t>(j - 1ULL)]);
-                    sum -= static_cast<i64>(pi(w / pj) - (j - 1ULL));
-                }
-            }
-        }
-
-        const u64 out = static_cast<u64>(sum);
-        pi_cache_[n] = out;
-        return out;
+    std::vector<int> primes;
+    primes.reserve(m / 10);
+    for (u64 i = 2; i <= n; ++i) {
+        if (is_prime[static_cast<std::size_t>(i)]) primes.push_back(static_cast<int>(i));
     }
+    return primes;
+}
 
-    const std::vector<int>& primes() const {
-        return primes_;
-    }
-
-private:
-    u64 phi(const u64 x, const int s) {
-        if (s == 0) {
-            return x;
-        }
-        if (s == 1) {
-            return x - x / 2ULL;
-        }
-        if (s == 2) {
-            return x - x / 2ULL - x / 3ULL + x / 6ULL;
-        }
-        if (s == 3) {
-            return x - x / 2ULL - x / 3ULL - x / 5ULL + x / 6ULL + x / 10ULL + x / 15ULL - x / 30ULL;
-        }
-        if (x <= static_cast<u64>(sieve_limit_) && static_cast<u64>(primes_[static_cast<std::size_t>(s - 1)]) >= x) {
-            return 1ULL;
-        }
-        const u64 key = (x << 16U) ^ static_cast<u64>(s);
-        auto it = phi_cache_.find(key);
-        if (it != phi_cache_.end()) {
-            return it->second;
-        }
-        const u64 out = phi(x, s - 1) - phi(x / static_cast<u64>(primes_[static_cast<std::size_t>(s - 1)]), s - 1);
-        phi_cache_[key] = out;
-        return out;
-    }
-
-    int sieve_limit_ = 0;
-    std::vector<int> primes_;
-    std::vector<u64> pi_small_;
-    std::vector<int> primes_for_phi_;
-    std::unordered_map<u64, u64> pi_cache_;
-    std::unordered_map<u64, u64> phi_cache_;
+struct PiTables {
+    u64 n = 0;
+    u64 v = 0;
+    std::vector<u64> smalls;
+    std::vector<u64> larges;
 };
 
-u64 solve(const u64 n) {
-    PrimeCounting pc;
-    const std::vector<int>& primes = pc.primes();
+PiTables tabulate_pis(u64 n, const std::vector<int>& primes) {
+    PiTables t;
+    t.n = n;
+    t.v = isqrt_u64(n);
+    t.smalls.assign(static_cast<std::size_t>(t.v + 1ULL), 0ULL);
+    t.larges.assign(static_cast<std::size_t>(t.v + 1ULL), 0ULL);
 
-    u64 total = 0ULL;
-
-    // Form p^7
-    total += pc.pi(static_cast<u64>(std::pow(static_cast<long double>(n), 1.0L / 7.0L)));
-    while (true) {
-        const u64 p = pc.pi(total);
-        (void)p;
-        break;
-    }
-    u64 p7_count = 0ULL;
-    for (int p : primes) {
-        __uint128_t p7 = 1;
-        for (int i = 0; i < 7; ++i) {
-            p7 *= static_cast<u64>(p);
-            if (p7 > n) {
-                break;
-            }
-        }
-        if (p7 <= n) {
-            ++p7_count;
-        } else {
-            break;
-        }
-    }
-    total = p7_count;
-
-    // Form p^3 q
-    for (int p : primes) {
-        const u64 p64 = static_cast<u64>(p);
-        const u64 p3 = p64 * p64 * p64;
-        if (p3 > n) {
-            break;
-        }
-        const u64 qmax = n / p3;
-        if (qmax < 2ULL) {
-            continue;
-        }
-        u64 cnt = pc.pi(qmax);
-        if (p64 <= qmax) {
-            --cnt;
-        }
-        total += cnt;
+    for (u64 i = 1; i <= t.v; ++i) {
+        t.smalls[static_cast<std::size_t>(i)] = i - 1ULL;
+        t.larges[static_cast<std::size_t>(i)] = n / i - 1ULL;
     }
 
-    // Form p q r, distinct primes, p<q<r
-    const std::size_t psz = primes.size();
-    for (std::size_t i = 0; i < psz; ++i) {
-        const u64 p = static_cast<u64>(primes[i]);
-        if (p * p * p > n) {
-            break;
+    for (int p_int : primes) {
+        const u64 p = static_cast<u64>(p_int);
+        if (p > t.v) break;
+        const u64 p_cnt = t.smalls[static_cast<std::size_t>(p - 1ULL)];
+        const u64 q = p * p;
+        if (q > n) break;
+        const u64 end = std::min<u64>(t.v, n / q);
+
+        for (u64 i = 1; i <= end; ++i) {
+            const u64 d = i * p;
+            if (d <= t.v) {
+                t.larges[static_cast<std::size_t>(i)] -=
+                    t.larges[static_cast<std::size_t>(d)] - p_cnt;
+            } else {
+                t.larges[static_cast<std::size_t>(i)] -=
+                    t.smalls[static_cast<std::size_t>(n / d)] - p_cnt;
+            }
         }
-        for (std::size_t j = i + 1; j < psz; ++j) {
-            const u64 q = static_cast<u64>(primes[j]);
-            if (p > n / (q * q)) {
-                break;
-            }
-            const u64 rmax = n / (p * q);
-            if (rmax <= q) {
-                continue;
-            }
-            const u64 upto = pc.pi(rmax);
-            const u64 before_or_equal_q = static_cast<u64>(j + 1);
-            if (upto > before_or_equal_q) {
-                total += (upto - before_or_equal_q);
-            }
+
+        for (u64 i = t.v; i >= q; --i) {
+            t.smalls[static_cast<std::size_t>(i)] -=
+                t.smalls[static_cast<std::size_t>(i / p)] - p_cnt;
+            if (i == q) break;
         }
     }
 
-    return total;
+    return t;
 }
 
-u64 brute_count(const u64 n) {
+u64 solve(u64 n) {
+    const u64 v = isqrt_u64(n);
+    const std::vector<int> primes = prime_sieve(v);
+    const PiTables pi = tabulate_pis(n, primes);
+
+    u64 ans = 0ULL;
+    const u64 cbrt_n = icbrt_u64(n);
+    const u64 pi_cbrt_n = pi.smalls[static_cast<std::size_t>(cbrt_n)];
+
+    for (u64 pi_idx = 0; pi_idx < pi_cbrt_n; ++pi_idx) {
+        const u64 p = static_cast<u64>(primes[static_cast<std::size_t>(pi_idx)]);
+        if (p * p * p >= n) break;
+        const u64 m = n / p;
+        const u64 q_lim = pi.smalls[static_cast<std::size_t>(isqrt_u64(m))];
+
+        for (u64 pj_idx = pi_idx + 1ULL; pj_idx < q_lim; ++pj_idx) {
+            const u64 q = static_cast<u64>(primes[static_cast<std::size_t>(pj_idx)]);
+            const u64 r = m / q;
+            const u64 pi_r = (r <= pi.v)
+                                 ? pi.smalls[static_cast<std::size_t>(r)]
+                                 : pi.larges[static_cast<std::size_t>(p * q)];
+            ans += pi_r - pi.smalls[static_cast<std::size_t>(q)];
+        }
+    }
+
+    for (u64 pi_idx = 0; pi_idx < pi_cbrt_n; ++pi_idx) {
+        const u64 p = static_cast<u64>(primes[static_cast<std::size_t>(pi_idx)]);
+        const u64 p3 = p * p * p;
+        const u64 r = n / p3;
+        if (r <= 1ULL) break;
+        ans += (r <= pi.v)
+                   ? pi.smalls[static_cast<std::size_t>(r)]
+                   : pi.larges[static_cast<std::size_t>(p3)];
+    }
+
+    const u64 root4 = isqrt_u64(isqrt_u64(n));
+    ans -= pi.smalls[static_cast<std::size_t>(root4)];
+    ans += pi.smalls[static_cast<std::size_t>(iroot7_u64(n))];
+
+    return ans;
+}
+
+u64 brute_count(u64 n) {
     u64 count = 0ULL;
     for (u64 x = 1ULL; x <= n; ++x) {
         u64 y = x;
         int d = 1;
         for (u64 p = 2ULL; p * p <= y; ++p) {
-            if (y % p != 0ULL) {
-                continue;
-            }
+            if (y % p != 0ULL) continue;
             int e = 0;
             while (y % p == 0ULL) {
                 y /= p;
@@ -274,12 +195,8 @@ u64 brute_count(const u64 n) {
             }
             d *= (e + 1);
         }
-        if (y > 1ULL) {
-            d *= 2;
-        }
-        if (d == 8) {
-            ++count;
-        }
+        if (y > 1ULL) d *= 2;
+        if (d == 8) ++count;
     }
     return count;
 }
@@ -308,12 +225,8 @@ bool run_checkpoints() {
 
 int main(int argc, char** argv) {
     Options options;
-    if (!parse_arguments(argc, argv, options)) {
-        return 1;
-    }
-    if (options.run_checkpoints && !run_checkpoints()) {
-        return 2;
-    }
+    if (!parse_arguments(argc, argv, options)) return 1;
+    if (options.run_checkpoints && !run_checkpoints()) return 2;
     std::cout << solve(options.n) << '\n';
     return 0;
 }

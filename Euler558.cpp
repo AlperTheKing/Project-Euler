@@ -1,6 +1,5 @@
-#include <algorithm>
+#include <boost/multiprecision/cpp_dec_float.hpp>
 #include <cstdint>
-#include <exception>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -10,9 +9,13 @@
 namespace {
 
 using u64 = std::uint64_t;
+using i64 = std::int64_t;
+using mpf = boost::multiprecision::cpp_dec_float_100;
 
 constexpr int kDefaultM = 5000000;
-constexpr int kExponentLimit = 12000;
+constexpr int kMinE = -180;
+constexpr int kMaxE = 90;
+constexpr i64 kM = 100000000000000000LL;
 
 struct Options {
     int m = kDefaultM;
@@ -20,21 +23,15 @@ struct Options {
 };
 
 bool parse_nonnegative_int(const std::string& text, int& out) {
-    if (text.empty()) {
-        return false;
-    }
-
+    if (text.empty()) return false;
     std::uint64_t value = 0;
-    for (const char ch : text) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
+    for (char ch : text) {
+        if (ch < '0' || ch > '9') return false;
         value = value * 10ULL + static_cast<std::uint64_t>(ch - '0');
         if (value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
             return false;
         }
     }
-
     out = static_cast<int>(value);
     return true;
 }
@@ -42,17 +39,15 @@ bool parse_nonnegative_int(const std::string& text, int& out) {
 bool parse_int_after_prefix(const std::string& arg,
                             const std::string& prefix,
                             int& value) {
-    if (arg.rfind(prefix, 0U) != 0U) {
-        return false;
-    }
+    if (arg.rfind(prefix, 0U) != 0U) return false;
     return parse_nonnegative_int(arg.substr(prefix.size()), value);
 }
 
-bool parse_arguments(const int argc, char** argv, Options& options) {
+bool parse_arguments(int argc, char** argv, Options& options) {
     bool seen_positional_m = false;
 
     for (int i = 1; i < argc; ++i) {
-        const std::string arg(argv[i]);
+        std::string arg(argv[i]);
 
         if (arg == "--skip-checkpoints") {
             options.run_checkpoints = false;
@@ -83,197 +78,59 @@ bool parse_arguments(const int argc, char** argv, Options& options) {
     return true;
 }
 
-class OddRepresentation {
-public:
-    explicit OddRepresentation(const int exponent_limit)
-        : offset_(exponent_limit),
-          bit_(2 * exponent_limit + 1, 0),
-          position_(2 * exponent_limit + 1, -1) {}
-
-    int offset() const { return offset_; }
-    int size() const { return static_cast<int>(bit_.size()); }
-    int weight() const { return static_cast<int>(active_indices_.size()); }
-
-    bool has(const int index) const {
-        if (index < 0 || index >= static_cast<int>(bit_.size())) {
-            return false;
-        }
-        return bit_[index] != 0;
+mpf cbrt_mpf(const mpf& x) {
+    if (x == 0) return mpf(0);
+    mpf y = exp(log(x) / 3);
+    for (int it = 0; it < 30; ++it) {
+        y = (2 * y + x / (y * y)) / 3;
     }
-
-    void set(const int index) {
-        if (bit_[index] != 0) {
-            return;
-        }
-        bit_[index] = 1;
-        position_[index] = static_cast<int>(active_indices_.size());
-        active_indices_.push_back(index);
-    }
-
-    void clear(const int index) {
-        if (index < 0 || index >= static_cast<int>(bit_.size()) ||
-            bit_[index] == 0) {
-            return;
-        }
-
-        bit_[index] = 0;
-        const int pos = position_[index];
-        const int last_index = active_indices_.back();
-        active_indices_[pos] = last_index;
-        position_[last_index] = pos;
-        active_indices_.pop_back();
-        position_[index] = -1;
-    }
-
-    const std::vector<int>& active_indices() const { return active_indices_; }
-
-private:
-    int offset_;
-    std::vector<std::uint8_t> bit_;
-    std::vector<int> position_;
-    std::vector<int> active_indices_;
-};
-
-class SquareRepresentation {
-public:
-    explicit SquareRepresentation(const int exponent_limit)
-        : offset_(exponent_limit), bit_(2 * exponent_limit + 1, 0) {}
-
-    int offset() const { return offset_; }
-    int size() const { return static_cast<int>(bit_.size()); }
-    int weight() const { return weight_; }
-
-    bool has(const int index) const {
-        if (index < 0 || index >= static_cast<int>(bit_.size())) {
-            return false;
-        }
-        return bit_[index] != 0;
-    }
-
-    void set(const int index) {
-        if (bit_[index] != 0) {
-            return;
-        }
-        bit_[index] = 1;
-        ++weight_;
-    }
-
-    void clear(const int index) {
-        if (index < 0 || index >= static_cast<int>(bit_.size()) ||
-            bit_[index] == 0) {
-            return;
-        }
-        bit_[index] = 0;
-        --weight_;
-    }
-
-private:
-    int offset_;
-    std::vector<std::uint8_t> bit_;
-    int weight_ = 0;
-};
-
-template <typename Representation>
-void add_single_power(Representation& rep, const int index) {
-    static thread_local std::vector<int> stack;
-    stack.clear();
-    stack.push_back(index);
-
-    const int n = rep.size();
-    while (!stack.empty()) {
-        const int x = stack.back();
-        stack.pop_back();
-
-        // Rules below may access up to x+3 and x-7.
-        if (x < 8 || x + 8 >= n) {
-            throw std::runtime_error(
-                "Exponent window exceeded; increase kExponentLimit.");
-        }
-
-        if (rep.has(x + 2)) {
-            rep.clear(x + 2);
-            stack.push_back(x + 3);
-            continue;
-        }
-        if (rep.has(x - 2)) {
-            rep.clear(x - 2);
-            stack.push_back(x + 1);
-            continue;
-        }
-        if (rep.has(x - 1)) {
-            rep.clear(x - 1);
-            stack.push_back(x - 4);
-            stack.push_back(x + 1);
-            continue;
-        }
-        if (rep.has(x + 1)) {
-            rep.clear(x + 1);
-            stack.push_back(x - 3);
-            stack.push_back(x + 2);
-            continue;
-        }
-        if (rep.has(x)) {
-            rep.clear(x);
-            stack.push_back(x - 7);
-            stack.push_back(x - 2);
-            stack.push_back(x + 1);
-            continue;
-        }
-
-        rep.set(x);
-    }
+    return y;
 }
 
-std::vector<int> sorted_exponents(const OddRepresentation& rep) {
-    std::vector<int> result;
-    result.reserve(rep.active_indices().size());
-    for (const int idx : rep.active_indices()) {
-        result.push_back(idx - rep.offset());
+struct RootTable {
+    std::vector<i64> u1;
+    std::vector<i64> u2;
+    std::vector<i64> u3;
+};
+
+RootTable build_root_table() {
+    RootTable table;
+    const int len = kMaxE - kMinE + 1;
+    table.u1.resize(static_cast<std::size_t>(len));
+    table.u2.resize(static_cast<std::size_t>(len));
+    table.u3.resize(static_cast<std::size_t>(len));
+
+    const mpf p = (mpf(29) - 3 * sqrt(mpf(93))) / 2;
+    const mpf q = mpf(29) - p;
+    const mpf r = (mpf(1) + cbrt_mpf(p) + cbrt_mpf(q)) / 3;
+
+    mpf z = 1;
+    for (int i = 0; i < -kMinE; ++i) z /= r;
+
+    for (int i = 0; i < len; ++i) {
+        mpf x = z;
+        const i64 y1 = x.convert_to<i64>();
+        table.u1[static_cast<std::size_t>(i)] = y1;
+
+        x = mpf(kM) * (x - mpf(y1));
+        const i64 y2 = x.convert_to<i64>();
+        table.u2[static_cast<std::size_t>(i)] = y2;
+
+        x = mpf(kM) * (x - mpf(y2));
+        const i64 y3 = x.convert_to<i64>();
+        table.u3[static_cast<std::size_t>(i)] = y3;
+
+        z *= r;
     }
-    std::sort(result.begin(), result.end());
-    return result;
+
+    return table;
 }
 
-bool validate_integer_examples() {
-    OddRepresentation value(kExponentLimit);
-
-    std::vector<int> exponents_for_3;
-    std::vector<int> exponents_for_10;
-
-    for (int n = 1; n <= 10; ++n) {
-        add_single_power(value, value.offset());
-
-        if (n == 3) {
-            if (value.weight() != 4) {
-                std::cerr << "Validation failed: w(3) should be 4, got "
-                          << value.weight() << "\n";
-                return false;
-            }
-            exponents_for_3 = sorted_exponents(value);
-        }
-
-        if (n == 10) {
-            if (value.weight() != 3) {
-                std::cerr << "Validation failed: w(10) should be 3, got "
-                          << value.weight() << "\n";
-                return false;
-            }
-            exponents_for_10 = sorted_exponents(value);
-        }
-    }
-
-    const std::vector<int> expected_3 = {-10, -5, -1, 2};
-    const std::vector<int> expected_10 = {-10, -7, 6};
-    if (exponents_for_3 != expected_3) {
-        std::cerr << "Validation failed: exponent set for 3 mismatch.\n";
-        return false;
-    }
-    if (exponents_for_10 != expected_10) {
-        std::cerr << "Validation failed: exponent set for 10 mismatch.\n";
-        return false;
-    }
-
-    return true;
+inline bool leq_lex(const i64 a1, const i64 a2, const i64 a3,
+                    const i64 b1, const i64 b2, const i64 b3) {
+    if (a1 != b1) return a1 < b1;
+    if (a2 != b2) return a2 < b2;
+    return a3 <= b3;
 }
 
 struct SolveResult {
@@ -282,73 +139,105 @@ struct SolveResult {
     u64 s_1000 = 0;
 };
 
-SolveResult solve_squares(const int m) {
-    OddRepresentation odd(kExponentLimit);
-    SquareRepresentation square(kExponentLimit);
+SolveResult solve_with_table(const int m, const RootTable& table) {
+    SolveResult out;
 
-    SolveResult result;
+    const int len = static_cast<int>(table.u1.size());
+    int i0 = -kMinE;
 
-    for (int i = 1; i <= m; ++i) {
-        // odd_i = 2*i - 1. This performs odd += 2 with the first step as +1.
-        add_single_power(odd, odd.offset());
-        if (i != 1) {
-            add_single_power(odd, odd.offset());
+    for (int j = 1; j <= m; ++j) {
+        const i64 n = static_cast<i64>(j) * static_cast<i64>(j);
+
+        if (n == 1) {
+            out.s_m += 1;
+            if (j == 10) out.s_10 = out.s_m;
+            if (j == 1000) out.s_1000 = out.s_m;
+            continue;
         }
 
-        // square_i = square_{i-1} + odd_i.
-        for (const int idx : odd.active_indices()) {
-            add_single_power(square, idx);
+        while (i0 < len && table.u1[static_cast<std::size_t>(i0)] < n) ++i0;
+        if (i0 >= len) {
+            throw std::runtime_error("Exponent window exceeded; increase [minE,maxE].");
         }
 
-        result.s_m += static_cast<u64>(square.weight());
-        if (i == 10) {
-            result.s_10 = result.s_m;
+        int i = i0 - 1;
+        i64 rep = 1;
+
+        i64 n1 = n - table.u1[static_cast<std::size_t>(i)] - 1;
+        i64 n2 = kM - table.u2[static_cast<std::size_t>(i)] - 1;
+        i64 n3 = kM - table.u3[static_cast<std::size_t>(i)];
+
+        while (true) {
+            i -= 3;
+            while (i >= 0 &&
+                   !leq_lex(table.u1[static_cast<std::size_t>(i)],
+                            table.u2[static_cast<std::size_t>(i)],
+                            table.u3[static_cast<std::size_t>(i)],
+                            n1, n2, n3)) {
+                --i;
+            }
+            if (i < 0) {
+                throw std::runtime_error("Exponent window underflow; decrease minE.");
+            }
+
+            ++rep;
+
+            n1 -= table.u1[static_cast<std::size_t>(i)];
+            n2 -= table.u2[static_cast<std::size_t>(i)];
+            n3 -= table.u3[static_cast<std::size_t>(i)];
+
+            if (n3 < 0) {
+                n3 += kM;
+                --n2;
+            }
+            if (n2 < 0) {
+                n2 += kM;
+                --n1;
+            }
+
+            if (n1 == 0 && n2 == 0 && n3 < 1000) {
+                out.s_m += static_cast<u64>(rep);
+                break;
+            }
         }
-        if (i == 1000) {
-            result.s_1000 = result.s_m;
-        }
+
+        if (j == 10) out.s_10 = out.s_m;
+        if (j == 1000) out.s_1000 = out.s_m;
     }
 
-    return result;
+    return out;
 }
 
-bool run_validations() {
-    if (!validate_integer_examples()) {
-        return false;
-    }
-
-    const SolveResult sample = solve_squares(1000);
+bool run_validations(const RootTable& table) {
+    const SolveResult sample = solve_with_table(1000, table);
     if (sample.s_10 != 61ULL) {
-        std::cerr << "Validation failed: S(10) should be 61, got "
-                  << sample.s_10 << "\n";
+        std::cerr << "Validation failed: S(10) should be 61, got " << sample.s_10 << '\n';
         return false;
     }
     if (sample.s_1000 != 19403ULL) {
-        std::cerr << "Validation failed: S(1000) should be 19403, got "
-                  << sample.s_1000 << "\n";
+        std::cerr << "Validation failed: S(1000) should be 19403, got " << sample.s_1000 << '\n';
         return false;
     }
-
     return true;
 }
 
 }  // namespace
 
-int main(const int argc, char** argv) {
+int main(int argc, char** argv) {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
     Options options;
-    if (!parse_arguments(argc, argv, options)) {
-        return 1;
-    }
+    if (!parse_arguments(argc, argv, options)) return 1;
 
     try {
-        if (options.run_checkpoints && !run_validations()) {
+        const RootTable table = build_root_table();
+
+        if (options.run_checkpoints && !run_validations(table)) {
             return 1;
         }
 
-        const SolveResult result = solve_squares(options.m);
+        const SolveResult result = solve_with_table(options.m, table);
         std::cout << result.s_m << '\n';
     } catch (const std::exception& ex) {
         std::cerr << "Error: " << ex.what() << '\n';

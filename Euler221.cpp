@@ -2,13 +2,14 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 #include <cmath>
-#include <functional>
 
 namespace {
 
 using u64 = std::uint64_t;
+using u32 = std::uint32_t;
 using u128 = unsigned __int128;
 
 struct Options {
@@ -54,41 +55,148 @@ bool parse_arguments(int argc, char** argv, Options& options) {
     return options.target >= 1;
 }
 
-u64 nth_alexandrian(const int target) {
-    std::vector<u128> values;
+struct U128Hash {
+    std::size_t operator()(const u128 v) const noexcept {
+        const std::uint64_t lo = static_cast<std::uint64_t>(v);
+        const std::uint64_t hi = static_cast<std::uint64_t>(v >> 64);
+        return static_cast<std::size_t>(lo ^ (hi * 0x9e3779b97f4a7c15ULL));
+    }
+};
 
-    int p_limit = 2000;
-    while (true) {
-        values.clear();
-        values.reserve(static_cast<std::size_t>(p_limit * 10));
+struct PrimeTable {
+    std::vector<u32> primes{2U};
+    u32 next_candidate = 3U;
 
-        for (int p = 1; p <= p_limit; ++p) {
-            const u64 n = static_cast<u64>(p) * static_cast<u64>(p) + 1ULL;
-            const int r = static_cast<int>(std::sqrt(static_cast<long double>(n)));
-
-            for (int d = 1; d <= r; ++d) {
-                if (n % static_cast<u64>(d) != 0ULL) {
-                    continue;
+    void ensure_up_to(const u64 limit) {
+        while (primes.back() < limit) {
+            bool is_prime = true;
+            for (const u32 p : primes) {
+                const u64 pu = static_cast<u64>(p);
+                if (pu * pu > static_cast<u64>(next_candidate)) {
+                    break;
                 }
-                const u64 e = n / static_cast<u64>(d);
-                const u128 pu = static_cast<u128>(static_cast<u64>(p));
-                const u128 v = pu * (pu + static_cast<u128>(static_cast<u64>(d))) * (pu + static_cast<u128>(e));
-                values.push_back(v);
+                if (next_candidate % p == 0U) {
+                    is_prime = false;
+                    break;
+                }
             }
+            if (is_prime) {
+                primes.push_back(next_candidate);
+            }
+            next_candidate += 2U;
+        }
+    }
+};
+
+void build_divisors_leq(
+    const std::vector<std::pair<u64, int>>& factors,
+    const std::size_t idx,
+    const u64 current,
+    const u64 limit,
+    std::vector<u64>& out
+) {
+    if (idx == factors.size()) {
+        out.push_back(current);
+        return;
+    }
+
+    const u64 prime = factors[idx].first;
+    const int exponent = factors[idx].second;
+    u64 power = 1ULL;
+
+    for (int e = 0; e <= exponent; ++e) {
+        if (current > limit / power) {
+            break;
+        }
+        build_divisors_leq(factors, idx + 1U, current * power, limit, out);
+        if (e == exponent || power > limit / prime) {
+            break;
+        }
+        power *= prime;
+    }
+}
+
+u64 nth_alexandrian(const int target) {
+    std::vector<u128> heap;
+    heap.reserve(static_cast<std::size_t>(target) + 16ULL);
+    std::unordered_set<u128, U128Hash> active;
+    active.reserve(static_cast<std::size_t>(target) * 2ULL + 64ULL);
+
+    PrimeTable table;
+    std::vector<std::pair<u64, int>> factors;
+    factors.reserve(8U);
+    std::vector<u64> divisors;
+    divisors.reserve(64U);
+
+    for (u64 p = 1ULL;; ++p) {
+        const u64 n = p * p + 1ULL;
+        const u64 root = static_cast<u64>(std::sqrt(static_cast<long double>(n)));
+        table.ensure_up_to(root + 1ULL);
+
+        factors.clear();
+        u64 rem = n;
+        for (const u32 prime : table.primes) {
+            const u64 q = static_cast<u64>(prime);
+            if (q * q > rem) {
+                break;
+            }
+            if (rem % q != 0ULL) {
+                continue;
+            }
+            int count = 0;
+            do {
+                rem /= q;
+                ++count;
+            } while (rem % q == 0ULL);
+            factors.push_back({q, count});
+        }
+        if (rem > 1ULL) {
+            factors.push_back({rem, 1});
         }
 
-        std::sort(values.begin(), values.end());
-        values.erase(std::unique(values.begin(), values.end()), values.end());
+        divisors.clear();
+        build_divisors_leq(factors, 0U, 1ULL, root, divisors);
 
-        if (static_cast<int>(values.size()) >= target) {
-            const u128 candidate = values[static_cast<std::size_t>(target - 1)];
-            const u128 lb = static_cast<u128>(p_limit + 1) * static_cast<u128>(p_limit + 2) * static_cast<u128>(p_limit + 2);
-            if (lb > candidate) {
-                return static_cast<u64>(candidate);
+        for (const u64 d : divisors) {
+            const u64 e = n / d;
+            const u128 pu = static_cast<u128>(p);
+            const u128 value = pu * (pu + static_cast<u128>(d)) * (pu + static_cast<u128>(e));
+
+            if (heap.size() < static_cast<std::size_t>(target)) {
+                if (active.insert(value).second) {
+                    heap.push_back(value);
+                    std::push_heap(heap.begin(), heap.end());
+                }
+                continue;
             }
+
+            const u128 current_max = heap.front();
+            if (value >= current_max) {
+                continue;
+            }
+            if (active.find(value) != active.end()) {
+                continue;
+            }
+
+            std::pop_heap(heap.begin(), heap.end());
+            const u128 removed = heap.back();
+            heap.pop_back();
+            active.erase(removed);
+
+            heap.push_back(value);
+            std::push_heap(heap.begin(), heap.end());
+            active.insert(value);
         }
 
-        p_limit *= 2;
+        if (heap.size() == static_cast<std::size_t>(target)) {
+            const u64 next_p = p + 1ULL;
+            const u128 lower_bound = static_cast<u128>(next_p) *
+                                     static_cast<u128>(next_p + 1ULL) *
+                                     static_cast<u128>(next_p + 1ULL);
+            if (lower_bound > heap.front()) {
+                return static_cast<u64>(heap.front());
+            }
+        }
     }
 }
 

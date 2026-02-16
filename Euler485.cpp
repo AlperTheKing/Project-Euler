@@ -52,9 +52,44 @@ bool parse_arguments(int argc, char** argv, Options& options) {
 
 std::vector<std::uint16_t> divisor_counts(const int u) {
     std::vector<std::uint16_t> d(static_cast<std::size_t>(u + 1), 0U);
-    for (int i = 1; i <= u; ++i) {
-        for (int j = i; j <= u; j += i) {
-            ++d[static_cast<std::size_t>(j)];
+    std::vector<std::uint16_t> lp(static_cast<std::size_t>(u + 1), 0U);
+    std::vector<std::uint8_t> exp(static_cast<std::size_t>(u + 1), 0U);
+    std::vector<int> primes;
+    primes.reserve(static_cast<std::size_t>(u / 10));
+
+    d[1] = 1U;
+    for (int i = 2; i <= u; ++i) {
+        int minp = lp[static_cast<std::size_t>(i)];
+        if (minp == 0) {
+            primes.push_back(i);
+            d[static_cast<std::size_t>(i)] = 2U;
+            exp[static_cast<std::size_t>(i)] = 1U;
+            minp = i;
+        }
+
+        for (int p : primes) {
+            if (p > minp) {
+                break;
+            }
+            const u64 x64 = static_cast<u64>(i) * static_cast<u64>(p);
+            if (x64 > static_cast<u64>(u)) {
+                break;
+            }
+            const int x = static_cast<int>(x64);
+
+            lp[static_cast<std::size_t>(x)] = static_cast<std::uint16_t>(p);
+            if (p == minp) {
+                const std::uint8_t e = static_cast<std::uint8_t>(exp[static_cast<std::size_t>(i)] + 1U);
+                exp[static_cast<std::size_t>(x)] = e;
+                d[static_cast<std::size_t>(x)] = static_cast<std::uint16_t>(
+                    d[static_cast<std::size_t>(i)] /
+                    static_cast<std::uint16_t>(exp[static_cast<std::size_t>(i)] + 1U) *
+                    static_cast<std::uint16_t>(e + 1U));
+                break;
+            }
+
+            exp[static_cast<std::size_t>(x)] = 1U;
+            d[static_cast<std::size_t>(x)] = static_cast<std::uint16_t>(d[static_cast<std::size_t>(i)] * 2U);
         }
     }
     return d;

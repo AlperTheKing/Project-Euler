@@ -95,6 +95,46 @@ static std::vector<char> squarefree_flags(int n) {
     return ok;
 }
 
+static std::vector<unsigned char> pairwise_coprime_small(int lim) {
+    const int stride = lim + 1;
+    std::vector<unsigned char> table(static_cast<size_t>(stride) * stride, 0U);
+    for (int a = 1; a <= lim; ++a) {
+        for (int b = a; b <= lim; ++b) {
+            const unsigned char v = (std::gcd(a, b) == 1) ? 1U : 0U;
+            table[static_cast<size_t>(a) * stride + b] = v;
+            table[static_cast<size_t>(b) * stride + a] = v;
+        }
+    }
+    return table;
+}
+
+static std::vector<unsigned char> pairwise_coprime_values(const std::vector<int>& values) {
+    const int m = static_cast<int>(values.size());
+    std::vector<unsigned char> table(static_cast<size_t>(m) * m, 0U);
+    for (int i = 0; i < m; ++i) {
+        for (int j = i; j < m; ++j) {
+            const unsigned char v = (std::gcd(values[static_cast<size_t>(i)],
+                                              values[static_cast<size_t>(j)]) == 1) ? 1U : 0U;
+            table[static_cast<size_t>(i) * m + j] = v;
+            table[static_cast<size_t>(j) * m + i] = v;
+        }
+    }
+    return table;
+}
+
+static std::vector<unsigned char> coprime_w_to_values(const std::vector<int>& values, int lim) {
+    const int m = static_cast<int>(values.size());
+    const int stride = lim + 1;
+    std::vector<unsigned char> table(static_cast<size_t>(m) * stride, 0U);
+    for (int i = 0; i < m; ++i) {
+        const int v = values[static_cast<size_t>(i)];
+        for (int w = 1; w <= lim; ++w) {
+            table[static_cast<size_t>(i) * stride + w] = (std::gcd(w, v) == 1) ? 1U : 0U;
+        }
+    }
+    return table;
+}
+
 static int64 count_overlap(int n) {
     int lim = static_cast<int>(std::sqrt(static_cast<long double>(n)));
     auto is_sf = squarefree_flags(lim);
@@ -108,25 +148,46 @@ static int64 count_overlap(int n) {
     std::vector<int64> squares(lim + 1, 0);
     for (int i = 0; i <= lim; ++i) squares[i] = static_cast<int64>(i) * i;
 
+    const int sf_count = static_cast<int>(sf.size());
+    const int w_stride = lim + 1;
+    const auto sf_pair_coprime = pairwise_coprime_values(sf);
+    const auto sf_w_coprime = coprime_w_to_values(sf, lim);
+    const auto w_pair_coprime = pairwise_coprime_small(lim);
+
     auto worker = [&](int start, int end) {
         int64 acc = 0;
-        for (int idx = start; idx < end; ++idx) {
-            int p = sf[idx];
+        for (int p_idx = start; p_idx < end; ++p_idx) {
+            const int p = sf[static_cast<size_t>(p_idx)];
             if (static_cast<int64>(p + 1) * (p + 1) > n) break;
-            for (int q : sf) {
-                if (std::gcd(p, q) != 1) continue;
-                int64 pq = static_cast<int64>(p) * q;
+            const unsigned char* cp =
+                &sf_w_coprime[static_cast<size_t>(p_idx) * w_stride];
+            for (int q_idx = 0; q_idx < sf_count; ++q_idx) {
+                const int q = sf[static_cast<size_t>(q_idx)];
+                if (sf_pair_coprime[static_cast<size_t>(p_idx) * sf_count + q_idx] == 0U) continue;
+                int64 pq = static_cast<int64>(p) * static_cast<int64>(q);
                 if ((pq + 1) * (p + q) > n) break;
-                for (int r : sf) {
-                    if (std::gcd(pq, static_cast<int64>(r)) != 1) continue;
-                    int64 pr = static_cast<int64>(p) * r;
+                const unsigned char* cq =
+                    &sf_w_coprime[static_cast<size_t>(q_idx) * w_stride];
+
+                for (int r_idx = 0; r_idx < sf_count; ++r_idx) {
+                    const int r = sf[static_cast<size_t>(r_idx)];
+                    if (sf_pair_coprime[static_cast<size_t>(p_idx) * sf_count + r_idx] == 0U) continue;
+                    if (sf_pair_coprime[static_cast<size_t>(q_idx) * sf_count + r_idx] == 0U) continue;
+                    int64 pr = static_cast<int64>(p) * static_cast<int64>(r);
                     if ((pq + r) * (pr + q) > n) break;
-                    int64 pqr = pq * r;
-                    for (int s : sf) {
-                        if (std::gcd(pqr, static_cast<int64>(s)) != 1) continue;
-                        int64 rs = static_cast<int64>(r) * s;
-                        int64 qs = static_cast<int64>(q) * s;
+                    const unsigned char* cr =
+                        &sf_w_coprime[static_cast<size_t>(r_idx) * w_stride];
+
+                    for (int s_idx = 0; s_idx < sf_count; ++s_idx) {
+                        const int s = sf[static_cast<size_t>(s_idx)];
+                        if (sf_pair_coprime[static_cast<size_t>(p_idx) * sf_count + s_idx] == 0U) continue;
+                        if (sf_pair_coprime[static_cast<size_t>(q_idx) * sf_count + s_idx] == 0U) continue;
+                        if (sf_pair_coprime[static_cast<size_t>(r_idx) * sf_count + s_idx] == 0U) continue;
+                        int64 rs = static_cast<int64>(r) * static_cast<int64>(s);
+                        int64 qs = static_cast<int64>(q) * static_cast<int64>(s);
                         if ((pq + rs) * (pr + qs) > n) break;
+                        const unsigned char* cs =
+                            &sf_w_coprime[static_cast<size_t>(s_idx) * w_stride];
 
                         int64 u = pq;
                         int64 v = rs;
@@ -138,23 +199,27 @@ static int64 count_overlap(int n) {
                         for (int w1 = 1; w1 <= lim; ++w1) {
                             int64 uw1 = u * squares[w1];
                             if (uw1 + v > max_x) break;
+                            if (cr[w1] == 0U || cs[w1] == 0U) continue;
                             for (int w2 = 1; w2 <= lim; ++w2) {
                                 int64 vw2 = v * squares[w2];
                                 int64 x = uw1 + vw2;
                                 if (x > max_x) break;
                                 if (uw1 <= vw2) continue;
-                                if (std::gcd(uw1, vw2) != 1) continue;
+                                if (cp[w2] == 0U || cq[w2] == 0U) continue;
+                                if (w_pair_coprime[static_cast<size_t>(w1) * w_stride + w2] == 0U) continue;
 
                                 int64 m = n / x;
                                 for (int w3 = 1; w3 <= lim; ++w3) {
                                     int64 aw3 = a * squares[w3];
                                     if (aw3 + b > m) break;
+                                    if (cq[w3] == 0U || cs[w3] == 0U) continue;
                                     for (int w4 = 1; w4 <= lim; ++w4) {
                                         int64 bw4 = b * squares[w4];
                                         int64 y = aw3 + bw4;
                                         if (y > m) break;
                                         if (aw3 <= bw4) continue;
-                                        if (std::gcd(aw3, bw4) != 1) continue;
+                                        if (cp[w4] == 0U || cr[w4] == 0U) continue;
+                                        if (w_pair_coprime[static_cast<size_t>(w3) * w_stride + w4] == 0U) continue;
                                         acc += m / y;
                                     }
                                 }

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <numeric>
@@ -68,6 +69,39 @@ std::vector<int> build_spf(const int n) {
         }
     }
     return spf;
+}
+
+void radix_sort_u64(std::vector<u64>& values) {
+    if (values.size() <= 1U) {
+        return;
+    }
+
+    std::vector<u64> tmp(values.size());
+    constexpr int RADIX_BITS = 16;
+    constexpr int RADIX_SIZE = 1 << RADIX_BITS;
+    constexpr u64 RADIX_MASK = static_cast<u64>(RADIX_SIZE - 1);
+    std::array<std::uint32_t, RADIX_SIZE> count{};
+
+    for (int pass = 0; pass < 4; ++pass) {
+        const int shift = pass * RADIX_BITS;
+        count.fill(0);
+
+        for (const u64 v : values) {
+            ++count[static_cast<std::size_t>((v >> shift) & RADIX_MASK)];
+        }
+
+        std::uint32_t acc = 0;
+        for (int i = 0; i < RADIX_SIZE; ++i) {
+            const std::uint32_t c = count[static_cast<std::size_t>(i)];
+            count[static_cast<std::size_t>(i)] = acc;
+            acc += c;
+        }
+
+        for (const u64 v : values) {
+            tmp[count[static_cast<std::size_t>((v >> shift) & RADIX_MASK)]++] = v;
+        }
+        values.swap(tmp);
+    }
 }
 
 u64 mod_pow_u64(u64 base, u64 exp, u64 mod) {
@@ -171,7 +205,7 @@ int S_value(int n, const std::vector<int>& spf) {
         y = static_cast<int>((3LL * y) % n);
     }
 
-    std::sort(points.begin(), points.end());
+    radix_sort_u64(points);
     points.erase(std::unique(points.begin(), points.end()), points.end());
 
     std::vector<int> tails;
@@ -189,10 +223,7 @@ int S_value(int n, const std::vector<int>& spf) {
     return static_cast<int>(tails.size());
 }
 
-i64 solve_sum(int k_max) {
-    const int n_max = 24300000;  // 30^5
-    const std::vector<int> spf = build_spf(n_max);
-
+i64 solve_sum(int k_max, const std::vector<int>& spf) {
     i64 ans = 0;
     for (int k = 1; k <= k_max; ++k) {
         int n = 1;
@@ -204,9 +235,7 @@ i64 solve_sum(int k_max) {
     return ans;
 }
 
-bool run_checkpoints() {
-    const int n_max = 24300000;
-    const std::vector<int> spf = build_spf(n_max);
+bool run_checkpoints(const std::vector<int>& spf) {
     if (S_value(22, spf) != 5) {
         std::cerr << "Checkpoint failed: S(22)\n";
         return false;
@@ -229,10 +258,14 @@ int main(int argc, char** argv) {
     if (!parse_arguments(argc, argv, options)) {
         return 1;
     }
-    if (options.run_checkpoints && !run_checkpoints()) {
+
+    const int n_max = 24300000;  // 30^5
+    const std::vector<int> spf = build_spf(n_max);
+
+    if (options.run_checkpoints && !run_checkpoints(spf)) {
         return 2;
     }
 
-    std::cout << solve_sum(options.k_max) << '\n';
+    std::cout << solve_sum(options.k_max, spf) << '\n';
     return 0;
 }

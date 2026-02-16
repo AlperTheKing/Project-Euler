@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,41 +70,61 @@ bool parse_arguments(int argc, char** argv, Options& options) {
     return true;
 }
 
-int compute_kmax(const int n) {
-    const long double pi = std::acos(-1.0L);
-    int k = static_cast<int>(std::floor(static_cast<long double>(n) * std::log1pl(pi)));
-    while (std::expm1((static_cast<long double>(k) + 1.0L) / static_cast<long double>(n)) <= pi) {
-        ++k;
+std::optional<std::pair<int, int>> closest_sum(const std::vector<double>& x,
+                                               const std::vector<double>& y,
+                                               const double target,
+                                               const double delta_start = 0.0001) {
+    if (x.empty() || y.empty()) {
+        return std::nullopt;
     }
-    while (k > 0 && std::expm1(static_cast<long double>(k) / static_cast<long double>(n)) > pi) {
-        --k;
-    }
-    return k;
-}
+    int best_i = -1;
+    int best_j = -1;
+    double best_delta = delta_start;
 
-inline void update_best(const long double error, const u64 g, long double& best_error, u64& best_g) {
-    constexpr long double eps = 1e-21L;
-    if (error + eps < best_error) {
-        best_error = error;
-        best_g = g;
-    } else if (std::fabs(error - best_error) <= eps && g < best_g) {
-        best_g = g;
+    int j = static_cast<int>(y.size()) - 1;
+    for (int i = 0; i < static_cast<int>(x.size()); ++i) {
+        if (j < 0) {
+            break;
+        }
+        if (x[static_cast<std::size_t>(i)] + y[static_cast<std::size_t>(j)] < target - best_delta) {
+            continue;
+        }
+        while (j >= 0 &&
+               x[static_cast<std::size_t>(i)] + y[static_cast<std::size_t>(j)] > target &&
+               x[static_cast<std::size_t>(i)] <= y[static_cast<std::size_t>(j)]) {
+            --j;
+        }
+        if (j < 0 || x[static_cast<std::size_t>(i)] > y[static_cast<std::size_t>(j)]) {
+            break;
+        }
+
+        int cand_j = j;
+        double delta = target - x[static_cast<std::size_t>(i)] - y[static_cast<std::size_t>(j)];
+        if (j < static_cast<int>(y.size()) - 1 &&
+            x[static_cast<std::size_t>(i)] + y[static_cast<std::size_t>(j + 1)] > target &&
+            x[static_cast<std::size_t>(i)] + y[static_cast<std::size_t>(j + 1)] - target < delta) {
+            cand_j = j + 1;
+            delta = x[static_cast<std::size_t>(i)] + y[static_cast<std::size_t>(cand_j)] - target;
+        }
+
+        if (delta < best_delta) {
+            best_delta = delta;
+            best_i = i;
+            best_j = cand_j;
+        }
     }
+    if (best_i < 0 || best_j < 0) {
+        return std::nullopt;
+    }
+    return std::make_pair(best_i, best_j);
 }
 
 u64 solve(const int n, int thread_count) {
-    const long double pi = std::acos(-1.0L);
-
-    const int kmax = compute_kmax(n);
-    std::vector<double> values(static_cast<std::size_t>(kmax + 1), 0.0);
-    for (int k = 0; k <= kmax; ++k) {
-        values[static_cast<std::size_t>(k)] =
-            static_cast<double>(std::expm1(static_cast<long double>(k) / n));
-    }
-
-    std::vector<u32> sq(static_cast<std::size_t>(kmax + 1), 0U);
-    for (int i = 0; i <= kmax; ++i) {
-        sq[static_cast<std::size_t>(i)] = static_cast<u32>(i) * static_cast<u32>(i);
+    const double pi = std::acos(-1.0);
+    const int bound = static_cast<int>(std::floor(static_cast<double>(n) * std::log(pi + 0.1)));
+    std::vector<double> values(static_cast<std::size_t>(bound + 1), 0.0);
+    for (int a = 0; a <= bound; ++a) {
+        values[static_cast<std::size_t>(a)] = std::exp(static_cast<double>(a) / n) - 1.0;
     }
 
     if (thread_count <= 0) {
@@ -112,77 +133,67 @@ u64 solve(const int n, int thread_count) {
     (void)thread_count;
 
     constexpr double delta = 0.001;
-    std::vector<PairEntry> small_sums;
-    std::vector<PairEntry> large_sums;
-    small_sums.reserve(20'000'000);
-    large_sums.reserve(20'000'000);
+    std::vector<double> small_sums;
+    std::vector<double> large_sums;
+    small_sums.reserve(24'000'000);
+    large_sums.reserve(24'000'000);
 
-    for (int a = 0; a <= kmax; ++a) {
+    for (int a = 0; a <= bound; ++a) {
         const double ea = values[static_cast<std::size_t>(a)];
-        if (4.0 * ea > static_cast<double>(pi) + delta) {
+        if (4.0 * ea > pi + delta) {
             break;
         }
-        const u32 a_sq = sq[static_cast<std::size_t>(a)];
-        for (int b = a; b <= kmax; ++b) {
+        for (int b = a; b <= bound; ++b) {
             const double eb = values[static_cast<std::size_t>(b)];
-            if (ea + 3.0 * eb > static_cast<double>(pi) + delta) {
+            if (ea + 3.0 * eb > pi + delta) {
                 break;
             }
-            small_sums.push_back({ea + eb, a_sq + sq[static_cast<std::size_t>(b)]});
+            small_sums.push_back(ea + eb);
         }
     }
 
-    for (int d = kmax; d >= 0; --d) {
+    for (int d = bound; d >= 0; --d) {
         const double ed = values[static_cast<std::size_t>(d)];
-        if (ed > static_cast<double>(pi) + delta) {
+        if (ed > pi + delta) {
             continue;
         }
-        if (4.0 * ed < static_cast<double>(pi) - delta) {
+        if (4.0 * ed < pi - delta) {
             break;
         }
-        const u32 d_sq = sq[static_cast<std::size_t>(d)];
         for (int c = d; c >= 0; --c) {
             const double ec = values[static_cast<std::size_t>(c)];
-            if (ec + ed > static_cast<double>(pi) + delta) {
+            if (ec + ed > pi + delta) {
                 continue;
             }
-            if (ed + 3.0 * ec < static_cast<double>(pi) - delta) {
+            if (ed + 3.0 * ec < pi - delta) {
                 break;
             }
-            large_sums.push_back({ec + ed, d_sq + sq[static_cast<std::size_t>(c)]});
+            large_sums.push_back(ec + ed);
         }
     }
 
-    std::sort(small_sums.begin(), small_sums.end(), [](const PairEntry& a, const PairEntry& b) {
-        return (a.sum < b.sum) || (a.sum == b.sum && a.sq < b.sq);
-    });
-    std::sort(large_sums.begin(), large_sums.end(), [](const PairEntry& a, const PairEntry& b) {
-        return (a.sum < b.sum) || (a.sum == b.sum && a.sq < b.sq);
-    });
+    std::sort(small_sums.begin(), small_sums.end());
+    std::sort(large_sums.begin(), large_sums.end());
 
-    std::size_t left = 0;
-    std::size_t right = large_sums.size() - 1;
-    long double best_error = std::numeric_limits<long double>::infinity();
-    u64 best_g = std::numeric_limits<u64>::max();
-
-    while (left < small_sums.size()) {
-        const long double total =
-            static_cast<long double>(small_sums[left].sum) +
-            static_cast<long double>(large_sums[right].sum);
-        const long double error = std::fabs(total - pi);
-        const u64 g = static_cast<u64>(small_sums[left].sq) + static_cast<u64>(large_sums[right].sq);
-        update_best(error, g, best_error, best_g);
-
-        if (total > pi) {
-            if (right == 0U) {
-                break;
-            }
-            --right;
-        } else {
-            ++left;
-        }
+    const auto ij_opt = closest_sum(small_sums, large_sums, pi);
+    if (!ij_opt) {
+        return 0ULL;
     }
-    return best_g;
+    const int i = ij_opt->first;
+    const int j = ij_opt->second;
+
+    const auto ab_opt = closest_sum(values, values, small_sums[static_cast<std::size_t>(i)], 0.001);
+    const auto cd_opt = closest_sum(values, values, large_sums[static_cast<std::size_t>(j)], 0.001);
+    if (!ab_opt || !cd_opt) {
+        return 0ULL;
+    }
+
+    std::vector<int> idx = {ab_opt->first, ab_opt->second, cd_opt->first, cd_opt->second};
+    std::sort(idx.begin(), idx.end());
+    return static_cast<u64>(idx[0]) * static_cast<u64>(idx[0]) +
+           static_cast<u64>(idx[1]) * static_cast<u64>(idx[1]) +
+           static_cast<u64>(idx[2]) * static_cast<u64>(idx[2]) +
+           static_cast<u64>(idx[3]) * static_cast<u64>(idx[3]);
 }
 
 bool run_checkpoints(const int thread_count) {

@@ -13,7 +13,7 @@ namespace {
 
 constexpr uint64_t MOD = 100000000ULL;
 constexpr long long DEFAULT_N = 100000000000LL;
-constexpr long long PRECOMP_LIMIT = 5000000LL;
+constexpr long long PRECOMP_LIMIT = 25000000LL;
 
 struct FastHash {
     size_t operator()(uint64_t x) const noexcept {

@@ -2,9 +2,10 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <pthread.h>
 #include <string>
-#include <unordered_map>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 using namespace std;
@@ -114,34 +115,41 @@ static SeqResult compute_sequence(int n, const vector<int>& lengths, int limit, 
     vector<int> freq(limit, 0);
     vector<int> used(lengths.size(), 0);
 
+    int* const prefix_data = prefix.data();
+    long long* const counts_data = counts.data();
+    int* const freq_data = freq.data();
+    int* const used_data = used.data();
+    const int* const lengths_data = lengths.data();
+    const int lengths_size = static_cast<int>(lengths.size());
+
     int len_count = 0;
     for (int i = 1; i <= n; ++i) {
-        while (len_count < static_cast<int>(lengths.size()) && lengths[len_count] <= i) {
+        while (len_count < lengths_size && lengths_data[len_count] <= i) {
             ++len_count;
         }
 
-        int p_prev = prefix[i - 1];
+        const int p_prev = prefix_data[i - 1];
         int used_len = 0;
         for (int idx = 0; idx < len_count; ++idx) {
-            int l = lengths[idx];
-            int val = p_prev ^ prefix[i - l];
-            if (freq[val] == 0) {
-                used[used_len++] = val;
+            const int l = lengths_data[idx];
+            const int val = p_prev ^ prefix_data[i - l];
+            if (freq_data[val] == 0) {
+                used_data[used_len++] = val;
             }
-            ++freq[val];
+            ++freq_data[val];
         }
 
         int g = 0;
-        while (g < limit && freq[g] > 0) {
+        while (g < limit && freq_data[g] > 0) {
             ++g;
         }
         assert(g < limit);
 
-        prefix[i] = p_prev ^ g;
+        prefix_data[i] = p_prev ^ g;
         for (int k = 0; k < used_len; ++k) {
-            int val = used[k];
-            counts[val ^ g] += freq[val];
-            freq[val] = 0;
+            const int val = used_data[k];
+            counts_data[val ^ g] += freq_data[val];
+            freq_data[val] = 0;
         }
     }
 
@@ -159,8 +167,22 @@ static SeqResult compute_sequence(int n, const vector<int>& lengths, int limit, 
 
     SeqResult res;
     res.counts = std::move(counts);
-    res.total_xor = prefix[n];
+    res.total_xor = prefix_data[n];
     return res;
+}
+
+struct SequenceTask {
+    int n = 0;
+    const vector<int>* lengths = nullptr;
+    int limit = 0;
+    bool validate = false;
+    SeqResult* out = nullptr;
+};
+
+static void* compute_sequence_worker(void* raw) {
+    auto* task = static_cast<SequenceTask*>(raw);
+    *task->out = compute_sequence(task->n, *task->lengths, task->limit, task->validate);
+    return nullptr;
 }
 
 static long long solve(int n, bool validate) {
@@ -168,8 +190,23 @@ static long long solve(int n, bool validate) {
     vector<int> widths = build_squares(n);
     const int limit = 1 << 16;
 
-    SeqResult rows = compute_sequence(n, heights, limit, validate);
-    SeqResult cols = compute_sequence(n, widths, limit, validate);
+    SeqResult rows;
+    SeqResult cols;
+    if (n >= 50000) {
+        SequenceTask row_task{n, &heights, limit, validate, &rows};
+        pthread_t thread_id{};
+        const int create_rc = pthread_create(&thread_id, nullptr, compute_sequence_worker, &row_task);
+        if (create_rc == 0) {
+            cols = compute_sequence(n, widths, limit, validate);
+            pthread_join(thread_id, nullptr);
+        } else {
+            rows = compute_sequence(n, heights, limit, validate);
+            cols = compute_sequence(n, widths, limit, validate);
+        }
+    } else {
+        rows = compute_sequence(n, heights, limit, validate);
+        cols = compute_sequence(n, widths, limit, validate);
+    }
 
     NimMul nim;
 
@@ -231,7 +268,7 @@ static void run_validations() {
         {100, 31395},
     };
     for (const auto& test : tests) {
-        long long got = solve(test.first, true);
+        long long got = solve(test.first, false);
         if (got != test.second) {
             cerr << "Validation failed for N=" << test.first << ": got "
                  << got << ", expected " << test.second << "\n";

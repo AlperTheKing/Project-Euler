@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <pthread.h>
+#include <unistd.h>
 #include <vector>
 
 using u8 = std::uint8_t;
@@ -107,28 +109,29 @@ std::vector<PrimeInv> build_primes_and_inverses() {
     return out;
 }
 
-u64 solve() {
-    const auto rems = build_residues();
-    const auto pinv = build_primes_and_inverses();
-
+u64 solve_residue_block(const std::vector<u64>& rems,
+                        const std::vector<PrimeInv>& pinv,
+                        int thread_id,
+                        int thread_count) {
     std::vector<u8> flag(K, 255);
     u64 best_sum = 0;
 
-    for (u8 rid = 0; rid < rems.size(); ++rid) {
-        const u64 rem = rems[rid];
+    for (int rid = thread_id; rid < static_cast<int>(rems.size()); rid += thread_count) {
+        const u64 rem = rems[static_cast<std::size_t>(rid)];
+        const u8 rid_tag = static_cast<u8>(rid);
 
         for (const auto [p, inv] : pinv) {
             u64 base = ((START + rem) % p);
             base = (static_cast<__uint128_t>(base) * inv) % p;
             for (int i = 0; i < 9; ++i) {
-                for (u64 k = base; k < K; k += p) flag[static_cast<size_t>(k)] = rid;
+                for (u64 k = base; k < K; k += p) flag[static_cast<size_t>(k)] = rid_tag;
                 base += inv;
                 if (base >= p) base -= p;
             }
         }
 
         for (u64 i = 0; i < K; ++i) {
-            if (flag[static_cast<size_t>(i)] == rid) continue;
+            if (flag[static_cast<size_t>(i)] == rid_tag) continue;
             const u64 cand = START + rem - MOD * i;
             u64 sum = 0;
             for (int j = 0; j < 9; ++j) sum += (cand + static_cast<u64>(j)) / D[j];
@@ -136,6 +139,75 @@ u64 solve() {
         }
     }
 
+    return best_sum;
+}
+
+struct WorkerCtx {
+    const std::vector<u64>* rems;
+    const std::vector<PrimeInv>* pinv;
+    int thread_id;
+    int thread_count;
+    u64 local_best;
+};
+
+void* worker_main(void* ptr) {
+    auto* ctx = static_cast<WorkerCtx*>(ptr);
+    ctx->local_best = solve_residue_block(*ctx->rems, *ctx->pinv, ctx->thread_id, ctx->thread_count);
+    return nullptr;
+}
+
+unsigned choose_thread_count(std::size_t tasks) {
+    if (tasks <= 1) {
+        return 1U;
+    }
+    long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+    unsigned threads = (cpu_count > 0) ? static_cast<unsigned>(cpu_count) : 1U;
+    if (threads > 8U) {
+        threads = 8U;
+    }
+    if (threads > tasks) {
+        threads = static_cast<unsigned>(tasks);
+    }
+    return (threads == 0U) ? 1U : threads;
+}
+
+u64 solve() {
+    const auto rems = build_residues();
+    const auto pinv = build_primes_and_inverses();
+    const unsigned thread_count = choose_thread_count(rems.size());
+
+    if (thread_count == 1U) {
+        return solve_residue_block(rems, pinv, 0, 1);
+    }
+
+    std::vector<pthread_t> threads(thread_count);
+    std::vector<WorkerCtx> ctx(thread_count);
+    unsigned created = 0U;
+    bool failed = false;
+
+    for (unsigned t = 0U; t < thread_count; ++t) {
+        ctx[t] = WorkerCtx{&rems, &pinv, static_cast<int>(t), static_cast<int>(thread_count), 0ULL};
+        if (pthread_create(&threads[t], nullptr, worker_main, &ctx[t]) != 0) {
+            failed = true;
+            break;
+        }
+        ++created;
+    }
+
+    for (unsigned t = 0U; t < created; ++t) {
+        pthread_join(threads[t], nullptr);
+    }
+
+    if (failed) {
+        return solve_residue_block(rems, pinv, 0, 1);
+    }
+
+    u64 best_sum = 0ULL;
+    for (const auto& c : ctx) {
+        if (c.local_best > best_sum) {
+            best_sum = c.local_best;
+        }
+    }
     return best_sum;
 }
 

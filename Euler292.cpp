@@ -3,10 +3,8 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -21,21 +19,24 @@ struct Options {
 };
 
 struct Direction {
+    int length = 0;
     int dx = 0;
     int dy = 0;
-    int length = 0;
-    int max_multiple = 0;
+    double angle = 0.0;
 };
 
-struct DecodedState {
-    int x = 0;
-    int y = 0;
-    int perimeter = 0;
-    int edges_bucket = 0;
-    u64 count = 0ULL;
-};
-
-using StateMap = std::unordered_map<u64, u64>;
+int gcd2(int x, int y) {
+    x = std::abs(x);
+    y = std::abs(y);
+    if (y == 0) return x;
+    if (x == 0) return y;
+    while (y != 0) {
+        const int r = x % y;
+        x = y;
+        y = r;
+    }
+    return x;
+}
 
 bool parse_int_after_prefix(const std::string& arg,
                             const std::string& prefix,
@@ -112,277 +113,112 @@ bool parse_arguments(const int argc, char** argv, Options& options) {
     return true;
 }
 
-unsigned pick_thread_count(const unsigned requested) {
-    if (requested > 0U) {
-        return requested;
-    }
+std::vector<Direction> init_vectors(const int n) {
+    std::vector<Direction> vectors;
+    vectors.reserve(static_cast<std::size_t>(4 * n * n + 16));
 
-    // Hash-map dominated transitions are memory-bandwidth bound here; the
-    // threaded path is available via --threads=N for machines where it helps.
-    return 1U;
-}
-
-int integer_square_root_if_square(const int value) {
-    if (value < 0) {
-        return -1;
-    }
-
-    int root = static_cast<int>(std::sqrt(static_cast<long double>(value)));
-    while ((static_cast<long long>(root) + 1LL) * (static_cast<long long>(root) + 1LL) <=
-           static_cast<long long>(value)) {
-        ++root;
-    }
-    while (static_cast<long long>(root) * static_cast<long long>(root) >
-           static_cast<long long>(value)) {
-        --root;
-    }
-
-    if (static_cast<long long>(root) * static_cast<long long>(root) ==
-        static_cast<long long>(value)) {
-        return root;
-    }
-    return -1;
-}
-
-std::vector<Direction> build_directions(const int n) {
-    std::vector<Direction> directions;
-    directions.reserve(static_cast<std::size_t>(4 * n));
-
-    struct PolarDirection {
-        Direction direction;
-        long double angle = 0.0L;
-    };
-
-    std::vector<PolarDirection> raw;
-    raw.reserve(static_cast<std::size_t>(4 * n));
-
-    for (int dx = -n; dx <= n; ++dx) {
-        for (int dy = -n; dy <= n; ++dy) {
-            if (dx == 0 && dy == 0) {
-                continue;
-            }
-            if (std::gcd(std::abs(dx), std::abs(dy)) != 1) {
+    for (int y = -n; y <= n; ++y) {
+        for (int x = -n; x <= n; ++x) {
+            const int t = x * x + y * y;
+            const int t2 = static_cast<int>(std::sqrt(static_cast<double>(t)) + 0.5);
+            if (gcd2(x, y) != 1 || t2 * t2 != t) {
                 continue;
             }
 
-            const int length_sq = dx * dx + dy * dy;
-            const int length = integer_square_root_if_square(length_sq);
-            if (length <= 0 || length > n) {
-                continue;
+            double ang = std::atan2(static_cast<double>(y), static_cast<double>(x));
+            if (ang < 0.0) {
+                ang += 6.2831853071795862;
             }
-
-            PolarDirection pd;
-            pd.direction.dx = dx;
-            pd.direction.dy = dy;
-            pd.direction.length = length;
-            pd.direction.max_multiple = n / length;
-            pd.angle = std::atan2(static_cast<long double>(dy),
-                                  static_cast<long double>(dx));
-            raw.push_back(pd);
+            vectors.push_back(Direction{t2, x, y, ang});
         }
     }
 
-    std::sort(raw.begin(),
-              raw.end(),
-              [](const PolarDirection& lhs, const PolarDirection& rhs) {
-                  if (lhs.angle != rhs.angle) {
-                      return lhs.angle < rhs.angle;
+    std::sort(vectors.begin(), vectors.end(),
+              [](const Direction& a, const Direction& b) {
+                  if (a.angle != b.angle) {
+                      return a.angle < b.angle;
                   }
-                  if (lhs.direction.dx != rhs.direction.dx) {
-                      return lhs.direction.dx < rhs.direction.dx;
+                  if (a.dx != b.dx) {
+                      return a.dx < b.dx;
                   }
-                  return lhs.direction.dy < rhs.direction.dy;
+                  return a.dy < b.dy;
               });
 
-    directions.reserve(raw.size());
-    for (const PolarDirection& pd : raw) {
-        directions.push_back(pd.direction);
-    }
-
-    return directions;
+    return vectors;
 }
 
-u64 encode_state(const int x,
-                 const int y,
-                 const int perimeter,
-                 const int edges_bucket,
-                 const int n) {
-    const u64 width = static_cast<u64>(2 * n + 1);
-    const u64 perimeter_base = static_cast<u64>(n + 1);
+void add_transitions(const std::unordered_map<int, u64>& src,
+                     const int dx,
+                     const int dy,
+                     const int nrl,
+                     const int n,
+                     std::unordered_map<int, u64>& dst) {
+    const int base = n + 1;
+    const int nrl2 = nrl * nrl;
 
-    const u64 x_off = static_cast<u64>(x + n);
-    const u64 y_off = static_cast<u64>(y + n);
+    for (const auto& kv : src) {
+        const int packed = kv.first;
+        const u64 count = kv.second;
 
-    return (((static_cast<u64>(edges_bucket) * perimeter_base +
-              static_cast<u64>(perimeter)) *
-                 width +
-             x_off) *
-                width +
-            y_off);
-}
+        const int cy = packed % base;
+        const int cx = packed / base - n;
+        const int nx = cx + dx;
+        const int ny = cy + dy;
+        const int np = nx * nx + ny * ny;
 
-DecodedState decode_state(const u64 key, const int n) {
-    const u64 width = static_cast<u64>(2 * n + 1);
-    const u64 perimeter_base = static_cast<u64>(n + 1);
-
-    DecodedState decoded;
-
-    u64 tmp = key;
-    const u64 y_off = tmp % width;
-    tmp /= width;
-    const u64 x_off = tmp % width;
-    tmp /= width;
-
-    decoded.perimeter = static_cast<int>(tmp % perimeter_base);
-    tmp /= perimeter_base;
-
-    decoded.edges_bucket = static_cast<int>(tmp);
-    decoded.x = static_cast<int>(x_off) - n;
-    decoded.y = static_cast<int>(y_off) - n;
-
-    return decoded;
-}
-
-void add_single_direction_transitions(const std::vector<DecodedState>& states,
-                                      const std::size_t begin,
-                                      const std::size_t end,
-                                      const Direction& direction,
-                                      const int n,
-                                      StateMap& out) {
-    for (std::size_t i = begin; i < end; ++i) {
-        const DecodedState& state = states[i];
-
-        const int next_edges_bucket = (state.edges_bucket >= 3)
-                                          ? 3
-                                          : (state.edges_bucket + 1);
-
-        int x = state.x + direction.dx;
-        int y = state.y + direction.dy;
-        int perimeter = state.perimeter + direction.length;
-
-        for (int mult = 1;
-             mult <= direction.max_multiple && perimeter <= n;
-             ++mult) {
-            if (std::abs(x) <= n && std::abs(y) <= n) {
-                const u64 key =
-                    encode_state(x, y, perimeter, next_edges_bucket, n);
-                out[key] += state.count;
-            }
-
-            x += direction.dx;
-            y += direction.dy;
-            perimeter += direction.length;
+        if (ny >= 0 && np <= nrl2) {
+            const int key = (nx + n) * base + ny;
+            dst[key] += count;
         }
     }
 }
 
-StateMap apply_direction(const StateMap& current,
-                         const Direction& direction,
-                         const int n,
-                         const unsigned thread_count) {
-    std::vector<DecodedState> decoded_states;
-    decoded_states.reserve(current.size());
-    for (const auto& [key, count] : current) {
-        DecodedState decoded = decode_state(key, n);
-        decoded.count = count;
-        decoded_states.push_back(decoded);
-    }
-
-    StateMap next = current;
-
-    const u64 estimated_work = static_cast<u64>(decoded_states.size()) *
-                               static_cast<u64>(direction.max_multiple);
-    const bool use_parallel =
-        thread_count > 1U && decoded_states.size() >= 50000U &&
-        estimated_work >= 600000U;
-
-    if (!use_parallel) {
-        add_single_direction_transitions(
-            decoded_states, 0U, decoded_states.size(), direction, n, next);
-        return next;
-    }
-
-    const unsigned workers =
-        std::min<unsigned>(thread_count,
-                           static_cast<unsigned>(decoded_states.size()));
-    const std::size_t chunk_size =
-        (decoded_states.size() + static_cast<std::size_t>(workers) - 1U) /
-        static_cast<std::size_t>(workers);
-
-    std::vector<StateMap> locals(static_cast<std::size_t>(workers));
-    std::vector<std::thread> threads;
-    threads.reserve(static_cast<std::size_t>(workers));
-
-    for (unsigned worker = 0U; worker < workers; ++worker) {
-        const std::size_t begin = static_cast<std::size_t>(worker) * chunk_size;
-        const std::size_t end = std::min(decoded_states.size(), begin + chunk_size);
-        if (begin >= end) {
-            continue;
-        }
-
-        threads.emplace_back([
-            &decoded_states,
-            &direction,
-            n,
-            begin,
-            end,
-            &locals,
-            worker
-        ]() {
-            StateMap& local = locals[static_cast<std::size_t>(worker)];
-            local.reserve((end - begin) * static_cast<std::size_t>(2));
-            add_single_direction_transitions(
-                decoded_states, begin, end, direction, n, local);
-        });
-    }
-
-    for (std::thread& t : threads) {
-        t.join();
-    }
-
-    std::size_t additional_capacity = 0U;
-    for (const StateMap& local : locals) {
-        additional_capacity += local.size();
-    }
-    next.reserve(next.size() + additional_capacity);
-
-    for (const StateMap& local : locals) {
-        for (const auto& [key, count] : local) {
-            next[key] += count;
-        }
-    }
-
-    return next;
-}
-
-u64 count_polygons(const int n, const unsigned thread_count) {
+u64 count_polygons(const int n) {
     if (n < 3) {
         return 0ULL;
     }
 
-    const std::vector<Direction> directions = build_directions(n);
+    const std::vector<Direction> vectors = init_vectors((n - 1) / 2);
 
-    StateMap dp;
-    dp.reserve(1024U);
-    dp[encode_state(0, 0, 0, 0, n)] = 1ULL;
-
-    for (const Direction& direction : directions) {
-        dp = apply_direction(dp, direction, n, thread_count);
+    std::vector<std::unordered_map<int, u64>> arr(static_cast<std::size_t>(n + 1));
+    for (auto& h : arr) {
+        h.reserve(8);
     }
 
-    u64 answer = 0ULL;
-    for (int p = 0; p <= n; ++p) {
-        const u64 key = encode_state(0, 0, p, 3, n);
-        const auto it = dp.find(key);
-        if (it != dp.end()) {
-            answer += it->second;
+    const int origin_key = n * (n + 1);
+    arr[static_cast<std::size_t>(n)][origin_key] = 1ULL;
+
+    for (const Direction& v : vectors) {
+        for (int i = v.length; i <= n; ++i) {
+            const auto& src = arr[static_cast<std::size_t>(i)];
+            if (src.empty()) {
+                continue;
+            }
+            for (int g = 1; g <= i / v.length; ++g) {
+                const int nrl = i - v.length * g;
+                add_transitions(src, v.dx * g, v.dy * g, nrl, n, arr[static_cast<std::size_t>(nrl)]);
+            }
         }
     }
 
-    return answer;
+    long long diagonal = 0;
+    for (const Direction& v : vectors) {
+        diagonal += n / (2 * v.length);
+    }
+    diagonal /= 2;
+
+    long long answer = -diagonal - 1;
+    for (int i = 0; i <= n; ++i) {
+        const auto it = arr[static_cast<std::size_t>(i)].find(origin_key);
+        if (it != arr[static_cast<std::size_t>(i)].end()) {
+            answer += static_cast<long long>(it->second);
+        }
+    }
+
+    return static_cast<u64>(answer);
 }
 
-void run_checkpoints(const unsigned thread_count) {
+void run_checkpoints() {
     struct Checkpoint {
         int n;
         u64 expected;
@@ -395,7 +231,7 @@ void run_checkpoints(const unsigned thread_count) {
     };
 
     for (const Checkpoint& cp : checkpoints) {
-        const u64 got = count_polygons(cp.n, thread_count);
+        const u64 got = count_polygons(cp.n);
         if (got != cp.expected) {
             throw std::runtime_error("Checkpoint failed for P(" +
                                      std::to_string(cp.n) + "): got " +
@@ -418,13 +254,11 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--n must be non-negative");
         }
 
-        const unsigned thread_count = pick_thread_count(options.requested_threads);
-
         if (options.run_checkpoints) {
-            run_checkpoints(thread_count);
+            run_checkpoints();
         }
 
-        const u64 answer = count_polygons(options.perimeter_limit, thread_count);
+        const u64 answer = count_polygons(options.perimeter_limit);
         std::cout << answer << '\n';
     } catch (const std::exception& ex) {
         std::cerr << "Error: " << ex.what() << '\n';

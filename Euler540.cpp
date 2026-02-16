@@ -1,149 +1,117 @@
-#include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
-#include <numeric>
 #include <vector>
-#include <cmath>
-#include <functional>
 
-using namespace std;
-
-using u64 = uint64_t;
+using i64 = std::int64_t;
+using u64 = std::uint64_t;
 using u128 = unsigned __int128;
 
-static u64 isqrt_u64(u64 x) {
-    long double r = sqrt((long double)x);
-    u64 y = (u64)r;
-    while ((u128)(y + 1) * (y + 1) <= (u128)x) ++y;
-    while ((u128)y * y > (u128)x) --y;
-    return y;
+static inline u64 isqrt_u64(const u64 x) {
+    u64 r = static_cast<u64>(std::sqrt(static_cast<long double>(x)));
+    while ((u128)(r + 1) * (r + 1) <= (u128)x) ++r;
+    while ((u128)r * r > (u128)x) --r;
+    return r;
 }
 
-static u64 brute_P(u64 N) {
-    // Brute for validation (N up to 1e6 is fine).
-    u64 cnt = 0;
-    u64 mmax = isqrt_u64(N - 1);
-    for (u64 m = 2; m <= mmax; m++) {
-        u64 mm = m * m;
-        u64 nmax = isqrt_u64(N - mm);
-        if (nmax >= m) nmax = m - 1;
-        for (u64 n = 1; n <= nmax; n++) {
-            if (((m ^ n) & 1ULL) == 0) continue; // opposite parity
-            if (std::gcd(m, n) != 1) continue;
-            cnt++;
-        }
-    }
-    return cnt;
+static inline u64 icbrt_u64(const u64 x) {
+    u64 r = static_cast<u64>(std::cbrt(static_cast<long double>(x)));
+    while ((u128)(r + 1) * (r + 1) * (r + 1) <= (u128)x) ++r;
+    while ((u128)r * r * r > (u128)x) --r;
+    return r;
 }
 
-struct LinearSieve {
-    int n;
-    vector<uint32_t> spf;
-    vector<int> primes;
+static i64 helper(const u64 L) {
+    i64 res = 0;
+    u64 m0 = static_cast<u64>(0.5L + std::sqrt(0.25L + static_cast<long double>(L - 1) / 2.0L));
+    u64 K = m0 / 2;
+    res += static_cast<i64>(K * K);
 
-    explicit LinearSieve(int n_) : n(n_), spf(n_ + 1, 0) {
-        primes.reserve((size_t)(n / 10));
-        for (int i = 2; i <= n; i++) {
-            if (spf[i] == 0) {
-                spf[i] = (uint32_t)i;
-                primes.push_back(i);
-            }
-            for (int p : primes) {
-                long long v = 1LL * p * i;
-                if (v > n) break;
-                spf[(int)v] = (uint32_t)p;
-                if (p == (int)spf[i]) break;
-            }
+    u64 m = 2 * K + 1;
+    u64 n = isqrt_u64((L > m * m) ? (L - m * m) : 0ULL);
+    while (true) {
+        u64 z = (L > m * m) ? (L - m * m) : 0ULL;
+        if (z == 0ULL) {
+            break;
         }
+        while ((u128)n * n > (u128)z) {
+            --n;
+        }
+        res += static_cast<i64>(n / 2);
+        ++m;
+
+        z = (L > m * m) ? (L - m * m) : 0ULL;
+        if (z == 0ULL) {
+            break;
+        }
+        while ((u128)n * n > (u128)z) {
+            --n;
+        }
+        res += static_cast<i64>((n + 1) / 2);
+        ++m;
     }
 
-    inline void distinct_prime_factors(int x, int *buf, int &k) const {
-        k = 0;
-        while (x > 1) {
-            int p = (int)spf[x];
-            buf[k++] = p;
-            while (x % p == 0) x /= p;
-        }
-    }
-};
-
-static inline u64 coprime_count(u64 t, int x, const LinearSieve &sv, int *pf_buf) {
-    // Count 1<=n<=t with gcd(n,x)=1 via inclusion-exclusion.
-    if (t == 0) return 0;
-    if (x == 1) return t;
-
-    int k = 0;
-    sv.distinct_prime_factors(x, pf_buf, k);
-
-    u64 res = 0;
-    int masks = 1 << k;
-    for (int mask = 0; mask < masks; mask++) {
-        u64 prod = 1;
-        int bits = 0;
-        for (int i = 0; i < k; i++) {
-            if (mask & (1 << i)) {
-                prod *= (u64)pf_buf[i];
-                bits++;
-            }
-        }
-        u64 term = t / prod;
-        if ((bits & 1) == 0) res += term;
-        else res -= term;
-    }
     return res;
 }
 
-static u64 P_large(u64 N) {
-    // Count primitive Pythagorean triples with a<b<c<=N.
-    // Euclid: c = m^2 + n^2, m>n, gcd(m,n)=1, m-n odd.
+static u64 solve(const u64 N) {
+    const u64 L = icbrt_u64(N);
+    std::vector<i64> v(static_cast<std::size_t>(L + 1), 0);
+    std::vector<i64> bigV(static_cast<std::size_t>(L / 2 + 1), 0);
 
-    u64 mmax = isqrt_u64(N - 1);
-    LinearSieve sv((int)mmax);
+    for (u64 x = 1; x <= L; ++x) {
+        i64 res = helper(x);
+        const u64 c = icbrt_u64(x);
 
-    int pf_buf[16];
-
-    u64 total = 0;
-    u64 nmax = mmax;
-
-    for (u64 m = 2; m <= mmax; m++) {
-        u128 mm = (u128)m * (u128)m;
-        while (nmax >= 1 && mm + (u128)nmax * (u128)nmax > (u128)N) --nmax;
-        if (nmax == 0) break;
-
-        u64 t = nmax;
-        if (t > m - 1) t = m - 1;
-        if (t == 0) continue;
-
-        if (m & 1ULL) {
-            // m odd -> n even: n=2x, x<=t/2, gcd(m,x)=1
-            total += coprime_count(t / 2, (int)m, sv, pf_buf);
-        } else {
-            // m even -> n odd. Let q=m/2, need gcd(q,n)=1 and n odd.
-            int q = (int)(m >> 1);
-            u64 all = coprime_count(t, q, sv, pf_buf);
-            if ((q & 1) == 0) {
-                // q even => all coprime n are odd.
-                total += all;
-            } else {
-                // q odd: subtract even n=2x with gcd(q,x)=1.
-                total += all - coprime_count(t / 2, q, sv, pf_buf);
-            }
+        for (u64 g = 3; g <= c; g += 2) {
+            res -= v[static_cast<std::size_t>(x / (g * g))];
         }
+
+        i64 prev_y = static_cast<i64>((isqrt_u64(x) - 1) / 2);
+        const u64 z_end = c + ((x / (c * c) != c) ? 1ULL : 0ULL);
+        for (u64 z = 1; z < z_end; ++z) {
+            i64 y = static_cast<i64>((isqrt_u64(x / (z + 1)) - 1) / 2);
+            res -= (prev_y - y) * v[static_cast<std::size_t>(z)];
+            prev_y = y;
+        }
+        v[static_cast<std::size_t>(x)] = res;
     }
 
-    return total;
+    for (i64 a = static_cast<i64>((L - 1) / 2); a >= 0; --a) {
+        const u64 x = static_cast<u64>(2 * a + 1);
+        const u64 k = N / (x * x);
+        i64 res = helper(k);
+        const u64 c = icbrt_u64(k);
+
+        for (u64 b = 1; b <= (c - 1) / 2; ++b) {
+            const u64 g = 2 * b + 1;
+            const u64 k_gg = k / (g * g);
+            if (k_gg <= L) {
+                res -= v[static_cast<std::size_t>(k_gg)];
+            } else {
+                const u64 idx = 2ULL * static_cast<u64>(a) * b + static_cast<u64>(a) + b;
+                res -= bigV[static_cast<std::size_t>(idx)];
+            }
+        }
+
+        i64 prev_y = static_cast<i64>((isqrt_u64(k) - 1) / 2);
+        const u64 z_end = c + ((k / (c * c) != c) ? 1ULL : 0ULL);
+        for (u64 z = 1; z < z_end; ++z) {
+            i64 y = static_cast<i64>((isqrt_u64(k / (z + 1)) - 1) / 2);
+            res -= (prev_y - y) * v[static_cast<std::size_t>(z)];
+            prev_y = y;
+        }
+
+        bigV[static_cast<std::size_t>(a)] = res;
+    }
+
+    return static_cast<u64>(bigV[0]);
 }
 
 int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
-
-    // Validation points from the problem statement.
-    assert(brute_P(20) == 3);
-    assert(brute_P(1'000'000ULL) == 159139ULL);
-
-    const u64 N = 3141592653589793ULL;
-    cout << P_large(N) << '\n';
+    assert(solve(20ULL) == 3ULL);
+    assert(solve(1'000'000ULL) == 159139ULL);
+    std::cout << solve(3'141'592'653'589'793ULL) << '\n';
     return 0;
 }

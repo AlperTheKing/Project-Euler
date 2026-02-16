@@ -151,6 +151,43 @@ private:
         return count1_[static_cast<std::size_t>(n_ / v - 1)];
     }
 
+    u64 count_pairs(int e0, int e1, u64 limit, std::size_t i) const {
+        if (i + 1 >= primes_.size()) return 0;
+
+        u64 total = 0;
+        for (std::size_t j = i; j < primes_.size(); ++j) {
+            u64 p0e = 1;
+            if (!pow_leq_idx(j, e0, limit, p0e)) break;
+
+            const u64 lim1 = limit / p0e;
+            if (e1 == 1) {
+                const u64 cnt = pi(lim1);
+                if (cnt <= j + 1) break;
+                total += cnt - (j + 1);
+            } else if (e1 == 2) {
+                const u64 cnt = pi(isqrt_u64(lim1));
+                if (cnt <= j + 1) break;
+                total += cnt - (j + 1);
+            } else if (e1 == 4) {
+                const u64 cnt = pi(isqrt_u64(isqrt_u64(lim1)));
+                if (cnt <= j + 1) break;
+                total += cnt - (j + 1);
+            } else if (e1 == 8) {
+                const u64 cnt = pi(isqrt_u64(isqrt_u64(isqrt_u64(lim1))));
+                if (cnt <= j + 1) break;
+                total += cnt - (j + 1);
+            } else {
+                for (std::size_t k = j + 1; k < primes_.size(); ++k) {
+                    u64 p1e = 1;
+                    if (!pow_leq_idx(k, e1, lim1, p1e)) break;
+                    ++total;
+                }
+            }
+        }
+
+        return total;
+    }
+
     u64 signature_count(const std::vector<unsigned char>& s, int pos, u64 limit,
                         std::size_t i) const {
         const int rem = static_cast<int>(s.size()) - pos;
@@ -180,6 +217,9 @@ private:
                 ++cnt;
             }
             return cnt;
+        }
+        if (rem == 2) {
+            return count_pairs(static_cast<int>(s[pos]), static_cast<int>(s[pos + 1]), limit, i);
         }
 
         u64 total = 0;

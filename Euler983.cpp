@@ -186,7 +186,7 @@ static bool four_tuple_has_forbidden_sum(
 
 static bool test_selected_vectors(
     const vector<Point>& v,
-    const std::unordered_set<int64_t>& bad_disp
+    const vector<Point>& lattice
 ) {
     const int d = static_cast<int>(v.size());
     const int full = 1 << d;
@@ -202,6 +202,8 @@ static bool test_selected_vectors(
     std::unordered_set<int64_t> odd_keys;
     even_keys.reserve(full + 16);
     odd_keys.reserve(full + 16);
+    vector<Point> even_points;
+    even_points.reserve(full / 2 + 1);
 
     for (int mask = 0; mask < full; ++mask) {
         const int64_t key = pair_key(sums[mask].x, sums[mask].y);
@@ -209,6 +211,7 @@ static bool test_selected_vectors(
             if (!even_keys.insert(key).second) {
                 return false;
             }
+            even_points.push_back(sums[mask]);
         } else {
             if (!odd_keys.insert(key).second) {
                 return false;
@@ -216,19 +219,21 @@ static bool test_selected_vectors(
         }
     }
 
-    for (int i = 0; i < full; ++i) {
-        for (int j = i + 1; j < full; ++j) {
-            const unsigned diff = static_cast<unsigned>(i ^ j);
-            if ((__builtin_popcount(diff) & 1U) != 0U) {
+    for (const Point& c : even_points) {
+        for (const Point& dxy : lattice) {
+            const int nx = c.x + dxy.x;
+            const int ny = c.y + dxy.y;
+            if (odd_keys.find(pair_key(nx, ny)) != odd_keys.end()) {
                 continue;
             }
-            if (__builtin_popcount(diff) <= 2) {
-                continue;
-            }
-            const int dx = sums[i].x - sums[j].x;
-            const int dy = sums[i].y - sums[j].y;
-            if (bad_disp.find(pair_key(dx, dy)) != bad_disp.end()) {
-                return false;
+            int count = 0;
+            for (const Point& p : lattice) {
+                if (even_keys.find(pair_key(nx + p.x, ny + p.y)) != even_keys.end()) {
+                    ++count;
+                    if (count >= 2) {
+                        return false;
+                    }
+                }
             }
         }
     }
@@ -279,7 +284,7 @@ static bool find_for_m_and_dimension(int m, int d, int thread_count) {
                 return;
             }
             if (pos == d) {
-                if (test_selected_vectors(selected, bad_disp)) {
+                if (test_selected_vectors(selected, lattice)) {
                     found.store(true, std::memory_order_relaxed);
                 }
                 return;

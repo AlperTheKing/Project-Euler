@@ -268,7 +268,7 @@ int main(int argc, const char * argv[]) {
             for(int thread = 0; thread < buildThreadCount; thread++) {
                 int start = firstStateInPrevLayer + thread * block ;
                 int end = start + block ;
-                if(end > stateCount) end = stateCount;
+                if(end > firstStateInCurrentLayer) end = firstStateInCurrentLayer;
                 BuildRangeTask &task = buildTasks[thread];
                 task.states = states;
                 task.state_start = start;

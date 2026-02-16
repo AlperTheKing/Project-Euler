@@ -15,6 +15,7 @@ namespace {
 struct SeqResult {
     vector<long long> counts;
     int total_xor = 0;
+    bool overflow = false;
 };
 
 static vector<int> build_triangular(int n) {
@@ -112,13 +113,13 @@ static int nim_pow(int base, int exp, NimMul& nim) {
 static SeqResult compute_sequence(int n, const vector<int>& lengths, int limit, bool validate) {
     vector<int> prefix(n + 1, 0);
     vector<long long> counts(limit, 0);
-    vector<int> freq(limit, 0);
-    vector<int> used(lengths.size(), 0);
+    vector<uint16_t> freq(limit, 0);
+    vector<uint16_t> used(limit, 0);
 
     int* const prefix_data = prefix.data();
     long long* const counts_data = counts.data();
-    int* const freq_data = freq.data();
-    int* const used_data = used.data();
+    uint16_t* const freq_data = freq.data();
+    uint16_t* const used_data = used.data();
     const int* const lengths_data = lengths.data();
     const int lengths_size = static_cast<int>(lengths.size());
 
@@ -133,8 +134,13 @@ static SeqResult compute_sequence(int n, const vector<int>& lengths, int limit, 
         for (int idx = 0; idx < len_count; ++idx) {
             const int l = lengths_data[idx];
             const int val = p_prev ^ prefix_data[i - l];
+            if (val >= limit) {
+                SeqResult overflow_res;
+                overflow_res.overflow = true;
+                return overflow_res;
+            }
             if (freq_data[val] == 0) {
-                used_data[used_len++] = val;
+                used_data[used_len++] = static_cast<uint16_t>(val);
             }
             ++freq_data[val];
         }
@@ -143,11 +149,15 @@ static SeqResult compute_sequence(int n, const vector<int>& lengths, int limit, 
         while (g < limit && freq_data[g] > 0) {
             ++g;
         }
-        assert(g < limit);
+        if (g >= limit) {
+            SeqResult overflow_res;
+            overflow_res.overflow = true;
+            return overflow_res;
+        }
 
         prefix_data[i] = p_prev ^ g;
         for (int k = 0; k < used_len; ++k) {
-            const int val = used_data[k];
+            const int val = static_cast<int>(used_data[k]);
             counts_data[val ^ g] += freq_data[val];
             freq_data[val] = 0;
         }
@@ -188,33 +198,44 @@ static void* compute_sequence_worker(void* raw) {
 static long long solve(int n, bool validate) {
     vector<int> heights = build_triangular(n);
     vector<int> widths = build_squares(n);
-    const int limit = 1 << 16;
+    int limit = 512;
 
     SeqResult rows;
     SeqResult cols;
-    if (n >= 50000) {
-        SequenceTask row_task{n, &heights, limit, validate, &rows};
-        pthread_t thread_id{};
-        const int create_rc = pthread_create(&thread_id, nullptr, compute_sequence_worker, &row_task);
-        if (create_rc == 0) {
-            cols = compute_sequence(n, widths, limit, validate);
-            pthread_join(thread_id, nullptr);
+    while (true) {
+        if (n >= 50000) {
+            SequenceTask row_task{n, &heights, limit, validate, &rows};
+            pthread_t thread_id{};
+            const int create_rc =
+                pthread_create(&thread_id, nullptr, compute_sequence_worker, &row_task);
+            if (create_rc == 0) {
+                cols = compute_sequence(n, widths, limit, validate);
+                pthread_join(thread_id, nullptr);
+            } else {
+                rows = compute_sequence(n, heights, limit, validate);
+                cols = compute_sequence(n, widths, limit, validate);
+            }
         } else {
             rows = compute_sequence(n, heights, limit, validate);
             cols = compute_sequence(n, widths, limit, validate);
         }
-    } else {
-        rows = compute_sequence(n, heights, limit, validate);
-        cols = compute_sequence(n, widths, limit, validate);
+
+        if (!rows.overflow && !cols.overflow) {
+            break;
+        }
+        if (limit >= (1 << 20)) {
+            cerr << "Exceeded maximum nimber limit while computing sequences\n";
+            std::exit(1);
+        }
+        limit <<= 1;
     }
 
     NimMul nim;
 
     int total_xor = nim.mul(rows.total_xor, cols.total_xor);
-
     int max_value = total_xor;
     for (int i = 0; i < limit; ++i) {
-        if (rows.counts[i] || cols.counts[i]) {
+        if (rows.counts[i] != 0 || cols.counts[i] != 0) {
             max_value = max(max_value, i);
         }
     }
@@ -228,7 +249,9 @@ static long long solve(int n, bool validate) {
 
     vector<int> inv(limit, -1);
     inv[0] = 0;
-    inv[1] = 1;
+    if (limit > 1) {
+        inv[1] = 1;
+    }
 
     long long sum_rows = 0;
     long long sum_cols = 0;
@@ -253,7 +276,9 @@ static long long solve(int n, bool validate) {
                 inv[a] = nim_pow(a, inv_exp, nim);
             }
             int b = nim.mul(inv[a], total_xor);
-            answer += count_a * cols.counts[b];
+            if (b >= 0 && b < limit) {
+                answer += count_a * cols.counts[b];
+            }
         }
     }
 
@@ -281,10 +306,12 @@ static void run_validations() {
 
 int main(int argc, char** argv) {
     int n = 1'000'000;
-    bool run_validation = true;
+    bool run_validation = false;
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
-        if (arg == "--no-validate") {
+        if (arg == "--validate") {
+            run_validation = true;
+        } else if (arg == "--no-validate") {
             run_validation = false;
         } else {
             n = stoi(arg);

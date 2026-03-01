@@ -28,32 +28,27 @@ bool extinct_for_k(int c, int d, u64 k) {
 
     const int s = c + d;
     std::array<u64, 321> window{};
-    for (int i = 0; i < s; ++i) window[static_cast<std::size_t>(i)] = 0;
     window[static_cast<std::size_t>(s - 1)] = k;
 
+    int zero_count = s - 1;
     int head = 0;
     int tap = s - d;
     u64 steps = 0;
     constexpr u64 CHECK_MASK = 255ULL;
 
     for (;;) {
+        const u64 old = window[static_cast<std::size_t>(head)];
         const u64 next = (window[static_cast<std::size_t>(head)] + window[static_cast<std::size_t>(tap)]) >> 1U;
 
         window[static_cast<std::size_t>(head)] = next;
+        zero_count += static_cast<int>(old != 0 && next == 0) - static_cast<int>(old == 0 && next != 0);
         if (++head == s) head = 0;
         if (++tap == s) tap = 0;
 
         ++steps;
         if ((steps & CHECK_MASK) == 0) {
-            u64 mn = std::numeric_limits<u64>::max();
-            u64 mx = 0;
-            for (int i = 0; i < s; ++i) {
-                const u64 v = window[static_cast<std::size_t>(i)];
-                if (v < mn) mn = v;
-                if (v > mx) mx = v;
-            }
-            if (mx == 0) return true;
-            if (mn >= 1) return false;
+            if (zero_count == s) return true;
+            if (zero_count == 0) return false;
         }
     }
 }

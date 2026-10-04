@@ -14,6 +14,13 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -302,6 +309,15 @@ void run_tests(const unsigned thread_count) {
     std::cout << "All checks passed.\n";
 }
 
+unsigned logical_processor_count() {
+#ifdef _WIN32
+    // All processor groups; hardware_concurrency() counts only the current group (64 of 128 threads here).
+    return static_cast<unsigned>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+#else
+    return std::thread::hardware_concurrency();
+#endif
+}
+
 void print_table(const unsigned thread_count) {
     std::cout << "Hardware threads: " << thread_count << "; three runs per input.\n";
     std::cout << "| N | S(N) | Median seconds | Series error bound |\n"
@@ -330,7 +346,7 @@ void print_table(const unsigned thread_count) {
 
 int main(int argc, char* argv[]) {
     try {
-        const unsigned thread_count = std::max(1U, std::thread::hardware_concurrency());
+        const unsigned thread_count = std::max(1U, logical_processor_count());
         if (argc == 2 && std::string(argv[1]) == "--self-test") {
             run_tests(thread_count);
             return EXIT_SUCCESS;

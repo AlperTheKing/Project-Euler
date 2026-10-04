@@ -52,7 +52,6 @@ Real block_sum(const u64 k, const u64 n, const std::vector<Real>& central) {
     const u64 last = std::min(n, threshold(k + 1) - 2);
     if (last < first) return 0;
 
-    // H_m = sum_(j=1..m) 1/(2j-1); this difference sums 1/(2n-3) over the block.
     Real harmonic = (boost::math::digamma(Real(last) - Real("0.5"))
         - boost::math::digamma(Real(first) - Real("1.5"))) / 2;
     Real weighted = 0;
@@ -73,7 +72,6 @@ struct Result {
 };
 
 std::array<Real, SERIES_ORDER + 1> central_moments(const u64 k) {
-    // Moments of 4X/(k-1)-1 for X ~ BetaBinomial(k-1, 1/2, 3/2).
     constexpr int coefficients[SERIES_ORDER + 1][SERIES_ORDER] = {
         {1}, {0}, {1, 2}, {1, 3, 2}, {3, 12, 10, -4},
         {6, 30, 40, 0, -16}, {15, 90, 150, 0, -104, 32},
@@ -119,8 +117,6 @@ Result series_block_sum(const u64 k, const u64 n) {
         pb *= ub;
     }
     const Real rho = 3 * h / a;
-    // The last Euler-Maclaurin correction bounds its integral remainder;
-    // the reciprocal expansion has a geometric tail bounded by rho^(ORDER+1)/(1-rho).
     bound += Real(last - first + 1) / a * pow(rho, SERIES_ORDER + 1) / (1 - rho);
     const Real coefficient = Real(2 * k * k + 1) * (2 * k) / (3 * (2 * k + 1));
     return {Real(last - first + 1) / (2 * k + 1) - coefficient * weighted, coefficient * bound};
@@ -311,7 +307,6 @@ void run_tests(const unsigned thread_count) {
 
 unsigned logical_processor_count() {
 #ifdef _WIN32
-    // All processor groups; hardware_concurrency() counts only the current group (64 of 128 threads here).
     return static_cast<unsigned>(GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
 #else
     return std::thread::hardware_concurrency();

@@ -26,9 +26,10 @@ namespace {
 
 using Real = boost::multiprecision::cpp_dec_float_50;
 using u64 = std::uint64_t;
+using Wide = boost::multiprecision::uint128_t;
 using Integer = boost::multiprecision::cpp_int;
 constexpr u64 TARGET = 100'000;
-constexpr u64 MAX_LIMIT = 10'000'000'000'000'000ULL;
+const Wide MAX_LIMIT = Wide(10'000'000'000ULL) * 10'000'000'000ULL;
 constexpr unsigned SERIES_START = 64;
 constexpr unsigned SERIES_ORDER = 8;
 const Real EPS("1e-40");
@@ -37,19 +38,41 @@ void require(const bool condition, const std::string& description) {
     if (!condition) throw std::runtime_error("Check failed: " + description);
 }
 
-u64 threshold(const u64 k) {
-    return (4 * k * k * k + 5 * k) / 6 + 2;
+Wide parse_limit(const std::string& text) {
+    require(!text.empty(), "integer limit");
+    Wide n = 0;
+    for (const char digit : text) {
+        require(digit >= '0' && digit <= '9', "integer limit");
+        n = 10 * n + (digit - '0');
+        require(n <= MAX_LIMIT, "supported limit through 10^20");
+    }
+    return n;
 }
 
-Real probability(const u64 n, const u64 k) {
+Wide threshold(const u64 k) {
+    return (Wide(4) * k * k * k + 5 * k) / 6 + 2;
+}
+
+unsigned block_count(const Wide& n) {
+    unsigned low = 0, high = 1;
+    while (threshold(high) <= n) high *= 2;
+    while (high - low > 1) {
+        const unsigned middle = low + (high - low) / 2;
+        if (threshold(middle) <= n) low = middle;
+        else high = middle;
+    }
+    return low;
+}
+
+Real probability(const Wide& n, const u64 k) {
     Real product = 1;
-    for (u64 i = 1; i <= k; ++i) product *= Real(2 * n - 4 * i - 1) / (2 * n - 4 * i + 1);
+    for (u64 i = 1; i <= k; ++i) product *= Real(2 * n - 4 * i - 1) / Real(2 * n - 4 * i + 1);
     return ((2 * k * k + 1) * product - 2 * (k * k - 1)) / (3 * (2 * k + 1));
 }
 
-Real block_sum(const u64 k, const u64 n, const std::vector<Real>& central) {
-    const u64 first = threshold(k);
-    const u64 last = std::min(n, threshold(k + 1) - 2);
+Real block_sum(const u64 k, const Wide& n, const std::vector<Real>& central) {
+    const Wide first = threshold(k);
+    const Wide last = std::min(n, Wide(threshold(k + 1) - 2));
     if (last < first) return 0;
 
     Real harmonic = (boost::math::digamma(Real(last) - Real("0.5"))
@@ -59,8 +82,8 @@ Real block_sum(const u64 k, const u64 n, const std::vector<Real>& central) {
         const Real residue = 2 * central[i - 1] * (2 * k - 2 * i + 1) * central[k - i];
         weighted += residue * harmonic;
         if (i < k) {
-            harmonic += Real(1) / (2 * first - 4 * i - 3) + Real(1) / (2 * first - 4 * i - 1)
-                - Real(1) / (2 * last - 4 * i - 1) - Real(1) / (2 * last - 4 * i + 1);
+            harmonic += Real(1) / Real(2 * first - 4 * i - 3) + Real(1) / Real(2 * first - 4 * i - 1)
+                - Real(1) / Real(2 * last - 4 * i - 1) - Real(1) / Real(2 * last - 4 * i + 1);
         }
     }
     return (Real(last - first + 1) - Real(2 * k * k + 1) * weighted / 3) / (2 * k + 1);
@@ -89,9 +112,9 @@ std::array<Real, SERIES_ORDER + 1> central_moments(const u64 k) {
     return moments;
 }
 
-Result series_block_sum(const u64 k, const u64 n) {
-    const u64 first = threshold(k);
-    const u64 last = std::min(n, threshold(k + 1) - 2);
+Result series_block_sum(const u64 k, const Wide& n) {
+    const Wide first = threshold(k);
+    const Wide last = std::min(n, Wide(threshold(k + 1) - 2));
     if (last < first) return {};
     const Real h = k - 1;
     const Real a = 2 * Real(first) - k - 2;
@@ -123,9 +146,11 @@ Result series_block_sum(const u64 k, const u64 n) {
 }
 
 struct Task {
-    u64 n = 0;
+    Wide n = 0;
     unsigned index = 0;
     unsigned stride = 1;
+    unsigned blocks = 0;
+    unsigned chunk_size = 1;
     const std::vector<Real>* central = nullptr;
     std::vector<Result>* sums = nullptr;
     std::exception_ptr error;
@@ -134,10 +159,18 @@ struct Task {
 void* sum_worker(void* argument) {
     Task& task = *static_cast<Task*>(argument);
     try {
-        for (unsigned k = task.index + 1; k < task.sums->size(); k += task.stride) {
-            (*task.sums)[k] = k < SERIES_START
-                ? Result{block_sum(k, task.n, *task.central), 0}
-                : series_block_sum(k, task.n);
+        for (unsigned chunk = task.index; chunk < task.sums->size(); chunk += task.stride) {
+            const unsigned first = chunk * task.chunk_size + 1;
+            const unsigned last = std::min(task.blocks, first + task.chunk_size - 1);
+            Result sum;
+            for (unsigned k = first; k <= last; ++k) {
+                const Result current = k < SERIES_START
+                    ? Result{block_sum(k, task.n, *task.central), 0}
+                    : series_block_sum(k, task.n);
+                sum.value += current.value;
+                sum.error_bound += current.error_bound;
+            }
+            (*task.sums)[chunk] = sum;
         }
     } catch (...) {
         task.error = std::current_exception();
@@ -145,22 +178,22 @@ void* sum_worker(void* argument) {
     return nullptr;
 }
 
-Result evaluate(const u64 n, unsigned thread_count) {
-    require(n <= MAX_LIMIT, "supported limit through 10^16");
+Result evaluate(const Wide& n, unsigned thread_count) {
+    require(n <= MAX_LIMIT, "supported limit through 10^20");
     if (n < 3) return {};
-    unsigned blocks = 1;
-    while (threshold(blocks + 1) <= n) ++blocks;
-    std::vector<Real> central(std::min(blocks, SERIES_START));
-    std::vector<Result> sums(blocks + 1);
-    central[0] = 1;
-    for (unsigned j = 1; j < central.size(); ++j) central[j] = central[j - 1] * (2 * j - 1) / (2 * j);
+    const unsigned blocks = block_count(n);
     thread_count = std::min(thread_count, blocks);
     require(thread_count > 0, "positive thread count");
+    const unsigned chunk_size = std::min(256U, std::max(1U, blocks / (4 * thread_count)));
+    std::vector<Real> central(std::min(blocks, SERIES_START));
+    std::vector<Result> sums((blocks + chunk_size - 1) / chunk_size);
+    central[0] = 1;
+    for (unsigned j = 1; j < central.size(); ++j) central[j] = central[j - 1] * (2 * j - 1) / (2 * j);
     std::vector<Task> tasks(thread_count);
     std::vector<pthread_t> threads(thread_count);
     unsigned created = 0;
     for (unsigned t = 0; t < thread_count; ++t) {
-        tasks[t] = {n, t, thread_count, &central, &sums, {}};
+        tasks[t] = {n, t, thread_count, blocks, chunk_size, &central, &sums, {}};
         if (thread_count == 1) {
             sum_worker(&tasks[t]);
         } else {
@@ -174,15 +207,15 @@ Result evaluate(const u64 n, unsigned thread_count) {
     require(joined, "pthread_join");
     for (const Task& task : tasks) if (task.error) std::rethrow_exception(task.error);
     Result result;
-    for (unsigned k = 1; k <= blocks; ++k) {
-        result.value += sums[k].value;
-        result.error_bound += sums[k].error_bound;
+    for (const Result& sum : sums) {
+        result.value += sum.value;
+        result.error_bound += sum.error_bound;
     }
     require(result.error_bound < Real("1e-24"), "series truncation bound");
     return result;
 }
 
-Real solve(const u64 n, const unsigned thread_count) {
+Real solve(const Wide& n, const unsigned thread_count) {
     return evaluate(n, thread_count).value;
 }
 
@@ -219,7 +252,7 @@ std::vector<Real> dense_equilibrium(const int first, const int last) {
     return result;
 }
 
-Integer threshold_numerator(const u64 k, const u64 n) {
+Integer threshold_numerator(const u64 k, const Wide& n) {
     Integer numerator = 1, denominator = 1;
     for (u64 i = 1; i <= k; ++i) {
         numerator *= 2 * Integer(n) - 4 * i - 1;
@@ -229,6 +262,25 @@ Integer threshold_numerator(const u64 k, const u64 n) {
 }
 
 void run_tests(const unsigned thread_count) {
+    require(parse_limit("100000000000000000000") == MAX_LIMIT, "parse 10^20");
+    require(parse_limit("18446744073709551616") == (Wide(1) << 64), "parse above 64 bits");
+    for (const std::string text : {"", "-1", "+1", "1e20", "1 ", "100000000000000000001",
+            "99999999999999999999999999999999999999999"}) {
+        bool rejected = false;
+        try { parse_limit(text); }
+        catch (const std::runtime_error&) { rejected = true; }
+        require(rejected, "reject invalid or unsupported limit");
+    }
+    for (const Wide& n : {Wide(0), Wide(2), Wide(3), Wide(1) << 64, MAX_LIMIT}) {
+        const unsigned count = block_count(n);
+        require((count == 0 || threshold(count) <= n) && threshold(count + 1) > n,
+            "block search boundaries");
+    }
+    const u64 largest_block = block_count(MAX_LIMIT);
+    for (const u64 block : {largest_block, largest_block + 1}) {
+        require(Integer(threshold(block)) == (4 * Integer(block) * block * block + 5 * block) / 6 + 2,
+            "wide cubic threshold versus unbounded integer");
+    }
     int max_block = 1;
     while (threshold(max_block) <= TARGET) ++max_block;
     for (int k = 1; k <= max_block; ++k) {
@@ -287,14 +339,13 @@ void run_tests(const unsigned thread_count) {
             require(abs(direct[order] - moments[order]) < EPS, "central moments versus partial-fraction residues");
         }
     }
-    u64 largest_block = 1;
-    while (threshold(largest_block + 1) <= MAX_LIMIT) ++largest_block;
-    for (const u64 block : std::array<u64, 4>{64, 65, 1000, largest_block}) {
+    const u64 reference_block = block_count(Wide(10'000'000'000'000'000ULL));
+    for (const u64 block : std::array<u64, 4>{64, 65, 1000, reference_block}) {
         std::vector<Real> central(block);
         central[0] = 1;
         for (u64 j = 1; j < block; ++j) central[j] = central[j - 1] * (2 * j - 1) / (2 * j);
-        const u64 first = threshold(block), last = threshold(block + 1) - 2;
-        for (const u64 end : {first, first + (last - first) / 2, last}) {
+        const Wide first = threshold(block), last = threshold(block + 1) - 2;
+        for (const Wide& end : {first, Wide(first + (last - first) / 2), last}) {
             const Result approximation = series_block_sum(block, end);
             require(abs(approximation.value - block_sum(block, end, central))
                 < approximation.error_bound + Real("1e-35"), "bounded series versus exact harmonic block");
@@ -302,6 +353,8 @@ void run_tests(const unsigned thread_count) {
     }
     require(abs(solve(1'000'000, 1) - solve(1'000'000, thread_count)) < EPS,
         "series thread consistency");
+    require(abs(solve(100'000'000, 1) - solve(100'000'000, thread_count)) < EPS,
+        "chunked thread consistency");
     std::cout << "All checks passed.\n";
 }
 
@@ -315,11 +368,11 @@ unsigned logical_processor_count() {
 
 void print_table(const unsigned thread_count) {
     std::cout << "Hardware threads: " << thread_count << "; three runs per input.\n";
-    std::cout << "| N | S(N) | Median seconds | Series error bound |\n"
-              << "|---:|---:|---:|---:|\n";
+    std::cout << "| N | S(N) | S(N)/N^(1/3) | Median seconds | Series error bound |\n"
+              << "|---:|---:|---:|---:|---:|\n";
     solve(TARGET, thread_count);
-    u64 n = 1;
-    for (unsigned exponent = 1; exponent <= 16; ++exponent) {
+    Wide n = 1;
+    for (unsigned exponent = 1; exponent <= 20; ++exponent) {
         n *= 10;
         std::array<double, 3> seconds{};
         Result result;
@@ -331,8 +384,9 @@ void print_table(const unsigned thread_count) {
             result = current;
         }
         std::sort(seconds.begin(), seconds.end());
-        std::cout << "| 10^" << exponent << " | " << std::fixed << std::setprecision(10)
-                  << result.value << " | " << std::setprecision(6) << seconds[1] << " | "
+        std::cout << "| 10^" << exponent << " | " << std::fixed << std::setprecision(24)
+                  << result.value << " | " << std::setprecision(23) << result.value / pow(Real(n), Real(1) / 3)
+                  << " | " << std::setprecision(6) << seconds[1] << " | "
                   << std::scientific << std::setprecision(2) << result.error_bound << " |" << std::endl;
     }
 }
@@ -350,11 +404,9 @@ int main(int argc, char* argv[]) {
             print_table(thread_count);
             return EXIT_SUCCESS;
         }
-        u64 n = TARGET;
+        Wide n = TARGET;
         if (argc == 3 && std::string(argv[1]) == "--limit") {
-            std::size_t consumed = 0;
-            n = std::stoull(argv[2], &consumed);
-            require(consumed == std::string(argv[2]).size(), "integer limit");
+            n = parse_limit(argv[2]);
         } else if (argc != 1) {
             throw std::invalid_argument("Usage: Euler1012 [--self-test | --table | --limit N]");
         }
